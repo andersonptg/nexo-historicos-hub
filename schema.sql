@@ -31,3 +31,18 @@ CREATE TABLE IF NOT EXISTS sync_status (
   last_count INTEGER DEFAULT 0,
   message TEXT DEFAULT 'Aguardando primeira consulta'
 );
+
+-- V6: snapshots compactados em uma linha, evitando centenas de escritas a cada consulta.
+-- Mantemos a tabela snapshots antiga para compatibilidade com os registros ja existentes.
+CREATE TABLE IF NOT EXISTS snapshot_cache (
+  source_id TEXT PRIMARY KEY,
+  payload TEXT NOT NULL,
+  last_updated INTEGER NOT NULL
+);
+
+-- V6: intervalo minimo compartilhado entre visitantes e agendamentos.
+CREATE TABLE IF NOT EXISTS collection_leases (
+  source_id TEXT PRIMARY KEY,
+  next_allowed INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER NOT NULL DEFAULT 0
+);

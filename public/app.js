@@ -44,7 +44,17 @@ function renderStats(){const totals={red:0,black:0,white:0};current.forEach(r=>t
  $('streak').textContent=first?`${k} ${k===1?'resultado':'resultados'} ${colorName(first.color).toLowerCase()}${k===1?'':'s'} consecutivo${k===1?'':'s'} no topo desta amostra.`:'Sem registros suficientes.';
 }
 async function readResults(force=false){if(working)return;working=true;
- try{const response=await fetch('/api/results?'+getParams(),{cache:'no-store'});if(!response.ok)throw Error('HTTP '+response.status);
+ try{
+  // Evita varrer todo o historico a cada 5 s quando nenhuma pedra mudou.
+  if(!force&&page===0&&current.length){
+    const p=getParams();p.set('limit','1');p.set('no_count','1');
+    const probe=await fetch('/api/results?'+p,{cache:'no-store'});
+    if(probe.ok){
+      const latest=await probe.json();
+      if(latest.items?.[0]?.id===current[0].id){$('server-online').textContent='Online';return;}
+    }
+  }
+  const response=await fetch('/api/results?'+getParams(),{cache:'no-store'});if(!response.ok)throw Error('HTTP '+response.status);
   const body=await response.json();const fingerprint=JSON.stringify([body.items?.map(x=>x.id),body.counts,mode]);
   if(force||fingerprint!==lastFingerprint){current=body.items||[];fillCounts(body.counts);render();lastFingerprint=fingerprint;}
   $('server-online').textContent='Online';
@@ -56,26 +66,44 @@ async function readStatus(){try{const response=await fetch('/api/status',{cache:
   $('last-new').textContent=st?.last_new??'—';$('source-count').textContent=st?.last_count??'—';
   const age=st?.latest_minute?Math.max(0,Math.floor((json.now-st.latest_minute)/60)):null;
   $('source-age').textContent=age===null?'—':`${age} min`;
-  const alive=!!st?.last_success;const latestTry=st?.last_attempt||0;const error=latestTry>st?.last_success && st?.message;
+  const alive=!!st?.last_success;
+  const latestTry=st?.last_attempt||0;
+  const consulting=st?.message==='Consultando fonte';
+  const successfulMessage=/^(Fonte publica consultada|Fonte pública consultada|Fonte atrasada)/.test(st?.message||'');
+  const error=alive&&!consulting&&!successfulMessage&&latestTry>(st?.last_success||0)&&!!st?.message;
   const stale=age!==null&&age>5;
   const statusBox=document.querySelector('.source-status');statusBox.classList.remove('bad','wait');
   if(!alive){statusBox.classList.add('wait');$('status-title').textContent='Aguardando dados públicos';$('status-explanation').textContent=st?.message||'O coletor ainda não realizou uma consulta bem-sucedida.';}
+  else if(consulting){statusBox.classList.add('wait');$('status-title').textContent='Consultando fonte pública';$('status-explanation').textContent='O histórico já salvo continua disponível durante a consulta.';}
   else if(error){statusBox.classList.add('bad');$('status-title').textContent='Falha na última coleta';$('status-explanation').textContent=st.message+' · Os dados salvos permanecem disponíveis.';}
   else if(stale){statusBox.classList.add('wait');$('status-title').textContent='Fonte atrasada';$('status-explanation').textContent=`O último resultado público tem aproximadamente ${age} minutos. ${st.message||''}`;}
   else{$('status-title').textContent='Coleta em funcionamento';$('status-explanation').textContent=st?.message||'Última leitura realizada';}
-  $('head-label').textContent=alive&&!error&&!stale?'Fonte pública ativa':(!alive?'Aguardando coleta':stale?'Fonte atrasada':'Falha na coleta');
-  $('live-dot').className='dot '+(alive&&!error&&!stale?'ok':error?'bad':'wait');
+  $('head-label').textContent=consulting?'Consultando fonte':alive&&!error&&!stale?'Fonte pública ativa':(!alive?'Aguardando coleta':stale?'Fonte atrasada':'Falha na coleta');
+  $('live-dot').className='dot '+(consulting?'wait':alive&&!error&&!stale?'ok':error?'bad':'wait');
  }catch(e){$('head-label').textContent='Servidor indisponível';$('live-dot').className='dot bad';$('server-online').textContent='Indisponível';}
 }
-let n=0;async function tick(){if(document.hidden)return;await readResults();if(n++%3===0)await readStatus();}
+// O Worker limita globalmente a fonte a uma tentativa/20 s; a tela continua a cada 5 s.
+let nextTick=0;
+async function requestSource(){
+ if(document.hidden||Date.now()<nextTick)return;
+ nextTick=Date.now()+20000;
+ try {await fetch('/api/tick',{method:'POST',cache:'no-store',credentials:'same-origin'});}
+ catch(e){ /* Nao bloqueia o historico salvo quando a fonte esta fora. */ }
+}
+let n=0;async function tick(){
+ if(document.hidden)return;
+ if(n%4===0)void requestSource();
+ await readResults();
+ if(n++%3===0)await readStatus();
+}
 $('number').insertAdjacentHTML('beforeend',Array.from({length:15},(_,i)=>`<option value="${i}">${i}</option>`).join(''));
 $('apply').addEventListener('click',()=>{filters={color:$('color').value,number:$('number').value,from:$('fromDate').value,to:$('toDate').value};page=0;lastFingerprint='';readResults(true);});
 $('reset').addEventListener('click',()=>{['color','number','fromDate','toDate'].forEach(id=>$(id).value='');filters={};page=0;lastFingerprint='';readResults(true);});
 $('precision').addEventListener('change',()=>{page=0;lastFingerprint='';readResults(true);});
-$('refresh').addEventListener('click',async()=>{await Promise.all([readResults(true),readStatus()]);});
+$('refresh').addEventListener('click',async()=>{void requestSource();await Promise.all([readResults(true),readStatus()]);});
 $('prev').addEventListener('click',()=>{if(page>0){page--;lastFingerprint='';readResults(true);}});
 $('next').addEventListener('click',()=>{if((page+1)*LIMIT<count){page++;lastFingerprint='';readResults(true);}});
 for(const m of ['grid','list'])$(m+'Mode').addEventListener('click',()=>{mode=m;$('gridMode').classList.toggle('selected',m==='grid');$('listMode').classList.toggle('selected',m==='list');render();});
 $('csv').addEventListener('click',()=>{const p=new URLSearchParams({platform:$('platform').value,game:$('game').value,precision:$('precision').value});window.location.href='/api/export.csv?'+p;});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){readResults(true);readStatus();}});
-await Promise.all([readResults(true),readStatus()]);setInterval(tick,5000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){void requestSource();readResults(true);readStatus();}});
+await Promise.all([readResults(true),readStatus()]);void requestSource();setInterval(tick,5000);
