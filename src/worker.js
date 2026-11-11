@@ -2,6 +2,7 @@ import {reconcileSnapshot} from './parser.js';
 import {ENABLED_SOURCES,PLATFORMS,sourceFor,catalogGame} from './sources/index.js';
 import {collectMultiplier,queryMultiplier,exportMultiplier} from './multi.js';
 import {adminHandler,sourceEnabled} from './admin.js';
+import {handleStrategies,processSmashSnapshot} from './strategies.js';
 const HEADERS = {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
 const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:HEADERS});
 const stamp=()=>Math.floor(Date.now()/1000);
@@ -59,6 +60,10 @@ async function collect(env,source=ENABLED_SOURCES[0]){
   statements.push(db.prepare(`UPDATE sync_status SET last_success=?,latest_minute=?,last_new=?,last_count=?,message=? WHERE source_id=?`)
     .bind(started,latest,newRows.length,records.length,message,source.id));
   await db.batch(statements);
+  if (source.platform==='smash'&&source.game==='double') {
+   try { await processSmashSnapshot(env,source,records,mapped,started); }
+   catch(error) { console.error('NEXO strategies:',String(error?.message||error)); }
+  }
   return {ok:true,new:newRows.length,count:records.length,latest,message};
  }catch(e){
   const error=String(e?.message||e).slice(0,350);
@@ -132,6 +137,14 @@ export default {
   const url=new URL(request.url), path=url.pathname;
   try {
    if(path==='/admin')return Response.redirect(url.origin+'/admin.html',302);
+   if(path==='/estrategias')return Response.redirect(url.origin+'/estrategias/smash/double',302);
+   if(path==='/estrategias/smash/double')return env.ASSETS.fetch(new Request(url.origin+'/estrategias.html',request));
+   if(path.startsWith('/resultados/')) {
+    const parts=path.split('/').filter(Boolean);
+    if(parts.length!==3||!(/^[a-z0-9-]{1,40}$/.test(parts[1])&&/^[a-z0-9-]{1,40}$/.test(parts[2])))return json({error:'Rota inválida'},404);
+    return env.ASSETS.fetch(new Request(url.origin+'/index.html',request));
+   }
+   if(path.startsWith('/api/strategies'))return handleStrategies(request,env,url);
    if(path.startsWith('/api/admin/'))return adminHandler(request,env,url);
    if(path==='/api/platforms'||path==='/api/catalog')return json(PLATFORMS);
    if(path==='/api/version'){

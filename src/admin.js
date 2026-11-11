@@ -11,7 +11,7 @@ async function hmac(password,message){
 function eq(a,b){if(typeof a!=='string'||typeof b!=='string'||a.length!==b.length)return false;
  let diff=0;for(let i=0;i<a.length;i++)diff|=a.charCodeAt(i)^b.charCodeAt(i);return diff===0;}
 const readCookie=request=>(request.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('nexo_admin='))?.slice(11)||'';
-async function authorized(request,env){
+export async function authorized(request,env){
  if(!env.ADMIN_TOKEN||env.ADMIN_TOKEN.length<16)return false;
  const cookie=readCookie(request),parts=cookie.split('.');if(parts.length!==2)return false;
  const expires=Number(parts[0]);if(!Number.isInteger(expires)||expires<now()||expires>now()+28800)return false;
@@ -21,7 +21,7 @@ async function accessKey(request,env){
  const ip=request.headers.get('CF-Connecting-IP')||'unknown';
  return (await hmac(env.ADMIN_TOKEN,'login:'+ip)).slice(0,40);
 }
-const sameOrigin=(request)=>{const origin=request.headers.get('Origin'),site=request.headers.get('Sec-Fetch-Site');
+export const sameOrigin=(request)=>{const origin=request.headers.get('Origin'),site=request.headers.get('Sec-Fetch-Site');
  return (!origin||origin===new URL(request.url).origin)&&(!site||site==='same-origin'||site==='none');};
 const cookieAttrs='Path=/; HttpOnly; Secure; SameSite=Strict';
 export async function adminHandler(request,env,url){

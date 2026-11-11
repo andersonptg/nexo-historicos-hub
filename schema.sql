@@ -63,3 +63,26 @@ CREATE TABLE IF NOT EXISTS admin_login_attempts (
  key TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0,
  blocked_until INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
 );
+
+-- V8: cada estratégia pertence à sua plataforma/jogo; início restrito ao Smash Double.
+CREATE TABLE IF NOT EXISTS strategies (
+ id TEXT PRIMARY KEY,platform TEXT NOT NULL,game TEXT NOT NULL,
+ definition TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,
+ created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_strategies_source ON strategies(platform,game,enabled);
+CREATE TABLE IF NOT EXISTS strategy_settings (
+ source_id TEXT PRIMARY KEY,config_json TEXT NOT NULL,updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS strategy_runtime (
+ strategy_id TEXT PRIMARY KEY,state_json TEXT NOT NULL,updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS strategy_cursors (
+ source_id TEXT PRIMARY KEY,last_round_id TEXT NOT NULL,last_updated INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS strategy_events (
+ event_seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,source_id TEXT NOT NULL,strategy_id TEXT NOT NULL,
+ event_type TEXT NOT NULL,round_id TEXT NOT NULL,step INTEGER NOT NULL,
+ message TEXT NOT NULL,round_number INTEGER NOT NULL,minute_epoch INTEGER NOT NULL,created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_strategy_events ON strategy_events(source_id,created_at DESC);

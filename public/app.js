@@ -191,7 +191,7 @@ async function changeGame(p,g){
  $('platform').value=p;fillGames(p);$('game').value=g&&getPlatform()?.games.some(x=>x.id===g)?g:getPlatform().games[0].id;
  filters={};for(const id of ['color','number','fromDate','toDate'])$(id).value='';
  updateMode();resetData();localStorage.setItem('nexo-selected-platform',p);localStorage.setItem('nexo-selected-game',$('game').value);
- const q=new URLSearchParams({platform:p,game:$('game').value});history.replaceState(null,'','?'+q);
+ history.replaceState(null,'',`/resultados/${encodeURIComponent(p)}/${encodeURIComponent($('game').value)}`);
  paintSidebar();await Promise.all([readResults(true),readStatus()]);void requestSource();
 }
 function fillGames(p){const games=catalog.find(x=>x.id===p)?.games||[];
@@ -241,8 +241,10 @@ async function init(){
   const response=await fetch('/api/catalog',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);
   catalog=await response.json();
   $('platform').textContent='';for(const p of catalog){const op=document.createElement('option');op.value=p.id;op.textContent=p.label;$('platform').append(op);}
-  const query=new URLSearchParams(location.search),p=query.get('platform')||localStorage.getItem('nexo-selected-platform')||'smash';
-  const g=query.get('game')||localStorage.getItem('nexo-selected-game')||'double';
+  const query=new URLSearchParams(location.search),parts=location.pathname.split('/').filter(Boolean);
+  const validRoute=parts[0]==='resultados'&&parts.length===3;
+  const p=(validRoute?parts[1]:query.get('platform'))||localStorage.getItem('nexo-selected-platform')||'smash';
+  const g=(validRoute?parts[2]:query.get('game'))||localStorage.getItem('nexo-selected-game')||'double';
   await changeGame(catalog.some(x=>x.id===p)?p:'smash',g);
  }catch(e){$('status-title').textContent='Erro ao carregar catálogo';$('status-explanation').textContent=String(e.message||e);}
  setInterval(tick,5000);
