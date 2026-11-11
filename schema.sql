@@ -86,3 +86,23 @@ CREATE TABLE IF NOT EXISTS strategy_events (
  message TEXT NOT NULL,round_number INTEGER NOT NULL,minute_epoch INTEGER NOT NULL,created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_strategy_events ON strategy_events(source_id,created_at DESC);
+
+-- V9: integração Telegram com envio inicialmente DESLIGADO.
+-- Nunca persistimos TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID no banco.
+CREATE TABLE IF NOT EXISTS telegram_settings (
+ source_id TEXT PRIMARY KEY,settings_json TEXT NOT NULL,updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS telegram_outbox (
+ queue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ event_id TEXT NOT NULL UNIQUE,
+ source_id TEXT NOT NULL,strategy_id TEXT NOT NULL,
+ event_type TEXT NOT NULL,action TEXT NOT NULL CHECK(action IN ('send','delete')),
+ message TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',
+ attempts INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL,
+ telegram_message_id INTEGER,created_at INTEGER NOT NULL,sent_at INTEGER,
+ last_error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_due ON telegram_outbox(status,next_attempt,queue_id);
+CREATE TABLE IF NOT EXISTS telegram_prealerts (
+ strategy_id TEXT PRIMARY KEY,message_id INTEGER NOT NULL,event_id TEXT NOT NULL,updated_at INTEGER NOT NULL
+);

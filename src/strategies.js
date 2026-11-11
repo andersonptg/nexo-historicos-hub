@@ -1,5 +1,6 @@
 import {authorized,sameOrigin} from './admin.js';
 import {validateRule,evolve,eventMessage,PRESET_MESSAGES,COLOR} from './strategyCore.js';
+import {getTelegramSettings,telegramQueueStatement,flushTelegram} from './telegram.js';
 
 const JSON_HEADERS={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:JSON_HEADERS});
@@ -96,6 +97,7 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
  const rules=(await loadRules(db)).filter(x=>x.enabled);
  const stateRows=rules.length?(await db.prepare('SELECT * FROM strategy_runtime WHERE strategy_id IN ('+rules.map(()=>'?').join(',')+')').bind(...rules.map(x=>x.id)).all()).results:[];
  const states=new Map(stateRows.map(x=>[x.strategy_id,parseJSON(x.state_json)||{active:null,prealertRoundId:null}]));
+ const telegram=await getTelegramSettings(db);
  const writes=[];let messages=0;
  for(let i=index-1;i>=0;i--){
   const history=records.slice(i).reverse().map((r,j)=>({id:roundIds[roundIds.length-1-j],number:r.number,color:r.color,minute_epoch:r.minute_epoch}));
@@ -107,7 +109,10 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
     const msg=eventMessage(event,rule,settings.templates);
     const eventId=`${rule.id}:${event.roundId}:${event.type}`;
     writes.push(db.prepare(`INSERT OR IGNORE INTO strategy_events(id,source_id,strategy_id,event_type,round_id,step,message,round_number,minute_epoch,created_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(eventId,source.id,rule.id,event.type,event.roundId,event.step,msg,event.number,event.minute_epoch,now));messages++;
+      VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(eventId,source.id,rule.id,event.type,event.roundId,event.step,msg,event.number,event.minute_epoch,now));
+    const outgoing=telegramQueueStatement(db,{eventId,sourceId:source.id,strategyId:rule.id,event,body:msg,now,config:telegram});
+    if(outgoing)writes.push(outgoing);
+    messages++;
    }
   }
  }
@@ -116,5 +121,8 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
  writes.push(db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id));
  // D1 batches are transactional: no partial strategy outcome is committed.
  await db.batch(writes);
+ // Entrega apos persistencia para impedir envio antes de salvar o evento.
+ // Falhas do Telegram nao devem quebrar a coleta da fonte publica.
+ try{await flushTelegram(env,4);}catch(error){console.warn('Falha no despachante Telegram',String(error?.message||error).slice(0,80));}
  return {new:index,events:messages};
 }

@@ -67,7 +67,7 @@ function reflectSettings(){const config=serverState?.settings;if(!config)return;
 }
 async function loadState(refreshEditor=false){const result=await api('/api/strategies/state?platform=smash&game=double');const initial=!serverState;serverState=result;rules=result.strategies;lastEventSeq=Math.max(0,...result.events.map(e=>e.seq||0));drawRules();drawEvents();if(initial||refreshEditor){drawTemplates();reflectSettings();} $('head-label').textContent='Banco D1 ativo';$('live-dot').className='dot ok';}
 async function changeSetting(key){const data={[key]:$(key).checked};await send('/api/strategies/settings','PUT',data);if(key==='fireworks'){prefs.fireworks=data.fireworks;prefSave();}flash(key==='automatic'?($(key).checked?'Monitoramento automático ativado.':'Monitoramento pausado.'): 'Preferência salva no D1.','saveMsg',true);await loadState(false);}
-async function login(){const password=$('password').value;await send('/api/admin/login','POST',{password});$('password').value='';$('loginPanel').classList.add('hidden');$('secureApp').classList.remove('hidden');await loadState(true);await loadCatalog();await readBalls();void requestTick();}
+async function login(){const password=$('password').value;await send('/api/admin/login','POST',{password});$('password').value='';$('loginPanel').classList.add('hidden');$('secureApp').classList.remove('hidden');await loadState(true);await loadTelegram();await loadCatalog();await readBalls();void requestTick();}
 function showLogin(error=''){ $('loginPanel').classList.remove('hidden');$('secureApp').classList.add('hidden');$('loginMsg').textContent=error;}
 async function loadCatalog(){try{const platforms=await api('/api/catalog');const host=$('navGames');host.textContent='';for(const p of platforms){const group=document.createElement('div');group.className='menu-group';const title=document.createElement('div');title.className='menu-platform';title.textContent=p.label;group.append(title);for(const game of p.games){const a=document.createElement('a');a.href=`/resultados/${encodeURIComponent(p.id)}/${encodeURIComponent(game.id)}`;a.textContent=game.label;const mark=document.createElement('small');mark.textContent=game.connected?'●':'○';a.append(mark);group.append(a);}host.append(group);}}catch{}}
 async function readEvents(){if(document.hidden||!serverState)return;
@@ -84,10 +84,36 @@ async function readBalls(){if(document.hidden||!serverState)return;
  }catch(e){$('sourceLabel').textContent='Falha ao consultar histórico: '+e.message;}
 }
 function celebrate(){if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;const canvas=$('fireworksCanvas');const ctx=canvas.getContext('2d');if(!ctx)return;canvas.hidden=false;const ratio=Math.min(window.devicePixelRatio||1,2);canvas.width=innerWidth*ratio;canvas.height=innerHeight*ratio;const stars=Array.from({length:120},(_,i)=>{const angle=Math.PI*2*(i%40)/40,speed=(2+Math.random()*4)*ratio;return {x:canvas.width*(0.3+(Math.floor(i/40)*0.2)),y:canvas.height*0.36,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed,life:1};});let frame=0;const draw=()=>{ctx.clearRect(0,0,canvas.width,canvas.height);for(const s of stars){s.x+=s.vx;s.y+=s.vy;s.vy+=.08*ratio;s.life-=.023;ctx.globalAlpha=Math.max(0,s.life);ctx.fillStyle=['#ff3a84','#f7d753','#66e8ff'][Math.floor(frame/6)%3];ctx.fillRect(s.x,s.y,3*ratio,3*ratio);}ctx.globalAlpha=1;if(++frame<45)requestAnimationFrame(draw);else canvas.hidden=true;};requestAnimationFrame(draw);}
+const tgFields=['enabled','prealert','entry','gale1','gale2','win','red','deletePrealert'];
+let telegramReady=false;
+async function loadTelegram(){
+ const status=await api('/api/telegram/status');telegramReady=!!status.configured;
+ for(const field of tgFields)$('tg-'+field).checked=!!status.settings[field];
+ $('telegramConnection').textContent=status.configured
+  ? '⚙️ Segredos presentes (formato válido). Faça o teste de envio. '+(status.settings.enabled?'Envio habilitado.':'Envio de sinais desativado.')
+  : '⚠️ Aguardando configuração: defina TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID como Secrets no Worker.';
+ const list=status.recent||[];
+ const summary=(status.counts||[]).map(x=>`${x.status}: ${x.n}`).join(' · ');
+ $('telegramDelivery').textContent=(summary||'Nenhuma mensagem na fila')+(list.length?'\nÚltimas tentativas:\n'+list.slice(0,8).map(x=>`${x.event_type} — ${x.status}${x.last_error?' ('+x.last_error+')':''}`).join('\n'):'');
+}
+async function saveTelegram(){
+ const data=Object.fromEntries(tgFields.map(k=>[k,$('tg-'+k).checked]));
+ await send('/api/telegram/settings','PUT',data);
+ await loadTelegram();flash('Preferências do Telegram salvas.','telegramMessage',true);
+}
+async function testTelegram(){
+ if(!confirm('Enviar uma mensagem de TESTE para o chat configurado no Worker?'))return;
+ const r=await send('/api/telegram/test','POST',{});
+ flash(r.ok?'Teste enviado! Confira o Telegram.':'Falha no envio do teste.','telegramMessage',!!r.ok);
+ await loadTelegram();
+}
 function initHandlers(){
  $('menuToggle').onclick=()=>{$('sidebar').classList.add('visible');$('menuBackdrop').classList.add('visible');$('menuToggle').setAttribute('aria-expanded','true');};
  const close=()=>{$('sidebar').classList.remove('visible');$('menuBackdrop').classList.remove('visible');$('menuToggle').setAttribute('aria-expanded','false');};$('menuClose').onclick=close;$('menuBackdrop').onclick=close;
  $('loginForm').onsubmit=e=>{e.preventDefault();safe(login,'loginMsg');};
+ $('telegramSave').onclick=()=>safe(saveTelegram,'telegramMessage');
+ $('telegramTest').onclick=()=>safe(testTelegram,'telegramMessage');
+ $('telegramReload').onclick=()=>safe(loadTelegram,'telegramMessage');
  $('logout').onclick=()=>safe(async()=>{await api('/api/admin/logout',{method:'POST'});showLogin('Sessão encerrada.');});
  for(const key of ['automatic','prealert','entry','fireworks'])$(key).onchange=()=>safe(()=>changeSetting(key),'saveMsg');
  for(const key of ['order','flow','clock'])$(key).onchange=()=>{prefs[key]=$(key).value;prefSave();readBalls();};
@@ -109,7 +135,7 @@ function initHandlers(){
  $('simulate').onclick=()=>safe(async()=>{const values=$('demoRounds').value.split(',').map(x=>x.trim()).filter(Boolean).map(Number);if(!values.length)throw Error('Insira números separados por vírgulas');const result=await send('/api/strategies/demo','POST',{rule:validClient(editorRule()),rounds:values,templates:serverState?.settings?.templates});$('demoOutput').textContent=result.events.length?result.events.map(e=>`${e.type.toUpperCase()}: ${e.message||'Limpeza do aviso'}`).join('\n\n'):'Nenhum padrão identificado nesta sequência.';},'editorMsg');
  renderBuilder();
 }
-async function init(){initHandlers();await loadCatalog();try{const a=await api('/api/admin/whoami');if(a.authenticated){$('loginPanel').classList.add('hidden');$('secureApp').classList.remove('hidden');await loadState(true);await readBalls();void requestTick();}else showLogin(a.configured?'':'Painel desativado: configure ADMIN_TOKEN no Worker (mínimo 16 caracteres).');}catch(e){showLogin(e.message);}
+async function init(){initHandlers();await loadCatalog();try{const a=await api('/api/admin/whoami');if(a.authenticated){$('loginPanel').classList.add('hidden');$('secureApp').classList.remove('hidden');await loadState(true);await loadTelegram();await readBalls();void requestTick();}else showLogin(a.configured?'':'Painel desativado: configure ADMIN_TOKEN no Worker (mínimo 16 caracteres).');}catch(e){showLogin(e.message);}
  // A tela verifica o D1 a cada 5s; a fonte pública permanece limitada à sua frequência real.
  setInterval(()=>{if(!document.hidden&&serverState&&!busy){busy=true;Promise.allSettled([readEvents(),readBalls()]).finally(()=>busy=false);}},5000);
  setInterval(()=>{if(!document.hidden&&serverState)void requestTick();},20000);

@@ -3,6 +3,7 @@ import {ENABLED_SOURCES,PLATFORMS,sourceFor,catalogGame} from './sources/index.j
 import {collectMultiplier,queryMultiplier,exportMultiplier} from './multi.js';
 import {adminHandler,sourceEnabled} from './admin.js';
 import {handleStrategies,processSmashSnapshot} from './strategies.js';
+import {handleTelegram,flushTelegram} from './telegram.js';
 const HEADERS = {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
 const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:HEADERS});
 const stamp=()=>Math.floor(Date.now()/1000);
@@ -145,6 +146,7 @@ export default {
     return env.ASSETS.fetch(new Request(url.origin+'/index.html',request));
    }
    if(path.startsWith('/api/strategies'))return handleStrategies(request,env,url);
+   if(path.startsWith('/api/telegram/'))return handleTelegram(request,env,url);
    if(path.startsWith('/api/admin/'))return adminHandler(request,env,url);
    if(path==='/api/platforms'||path==='/api/catalog')return json(PLATFORMS);
    if(path==='/api/version'){
@@ -197,5 +199,7 @@ export default {
   const others=ENABLED_SOURCES.filter(x=>x!==primary);
   const turn=others.length?others[Math.floor(Date.now()/60000)%others.length]:null;
   for(const s of [primary,turn])if(s)ctx.waitUntil(guardedCollect(env,s));
+  // Reprocessa a fila em caso de indisponibilidade temporaria do Telegram.
+  ctx.waitUntil(flushTelegram(env,4));
  }
 };
