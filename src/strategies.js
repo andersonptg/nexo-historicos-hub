@@ -73,7 +73,7 @@ export async function handleStrategies(request,env,url){
  if(path==='/api/strategies/demo'&&request.method==='POST'){
   const body=await read(request);let rule;
   try{rule=validateRule(body.rule);}catch(e){return json({error:e.message},400)}
-  if(!Array.isArray(body.rounds)||body.rounds.length>100||body.rounds.some(x=>!Number.isInteger(x)||x<0||x>14))return json({error:'Informe até 100 pedras de 0 a 14'},400);
+  if(!Array.isArray(body.rounds)||body.rounds.length>600||body.rounds.some(x=>!Number.isInteger(x)||x<0||x>14))return json({error:'Informe até 600 pedras de 0 a 14'},400);
   let state={active:null,prealertRoundId:null},history=[],events=[];
   body.rounds.forEach((number,i)=>{history.push({id:`demo-${i}`,number,color:COLOR[number],minute_epoch:0});const change=evolve(state,rule,history);state=change.state;events.push(...change.events.map(e=>({...e,message:eventMessage(e,rule,(body.templates||PRESET_MESSAGES))})));});
   return json({ok:true,events,finalState:state,notice:'Demonstração: nenhum sinal enviado e nenhuma aposta realizada.'});
@@ -91,7 +91,7 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
  if(!cursor){await db.prepare('INSERT OR IGNORE INTO strategy_cursors(source_id,last_round_id,last_updated) VALUES(?,?,?)').bind(source.id,newest,now).run();return {initialized:true};}
  if(cursor.last_round_id===newest)return {new:0};
  const index=roundIds.indexOf(cursor.last_round_id);
- if(index<0||index>25){await db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id).run();return {reset:true};}
+ if(index<0||index>25){await db.batch([db.prepare("DELETE FROM strategy_runtime WHERE strategy_id IN (SELECT id FROM strategies WHERE platform='smash' AND game='double')"),db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id)]);return {reset:true};}
  const settings=await getSettings(db);
  if(!settings.automatic){await db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id).run();return {paused:true,new:index};}
  const rules=(await loadRules(db)).filter(x=>x.enabled);

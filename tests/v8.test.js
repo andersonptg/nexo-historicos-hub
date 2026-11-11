@@ -11,7 +11,7 @@ test('V8: valida cores e números, misto e gale até 2',()=>{
  const m=validateRule({name:'Misto',pattern:[{kind:'number',value:0},{kind:'color',value:'red'}],targets:[{kind:'number',value:14}],galeMax:2});
  assert.equal(m.pattern[0].value,0);assert.equal(m.targets[0].value,14);assert.equal(m.enabled,false);
  assert.throws(()=>validateRule({...m,galeMax:3}),/Gale máximo/);
- assert.throws(()=>validateRule({...m,pattern:[]}),/2 e 12/);
+ assert.throws(()=>validateRule({...m,pattern:[]}),/1 e 500/);
  assert.throws(()=>validateRule({...m,targets:[{kind:'number',value:15}]}),/0 a 14/);
  assert.throws(()=>validateRule({...m,targets:[{kind:'color',value:'red'},{kind:'color',value:'red'}]}),/repetidos/);
 });

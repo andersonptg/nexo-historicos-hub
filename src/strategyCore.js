@@ -1,3 +1,4 @@
+// NEXO V10 - EDITOR DE PEDRAS
 // NEXO V8 — Motor determinístico de monitoramento de sequências concluídas.
 // Ordem: mais antigo → mais novo. Os eventos descrevem observações, não previsões.
 export const COLOR={0:'white',1:'red',2:'red',3:'red',4:'red',5:'red',6:'red',7:'red',8:'black',9:'black',10:'black',11:'black',12:'black',13:'black',14:'black'};
@@ -13,7 +14,7 @@ export function validateRule(value){
  if(!value||typeof value!=='object')throw Error('Estratégia inválida');
  const name=String(value.name||'Minha estratégia').trim();
  if(name.length<1||name.length>70)throw Error('O nome deve conter 1 a 70 caracteres');
- if(!Array.isArray(value.pattern)||value.pattern.length<2||value.pattern.length>12)throw Error('Sequência precisa ter entre 2 e 12 pedras');
+ if(!Array.isArray(value.pattern)||value.pattern.length<1||value.pattern.length>500)throw Error('Sequência precisa ter entre 1 e 500 pedras');
  if(!Array.isArray(value.targets)||value.targets.length<1||value.targets.length>4)throw Error('Escolha entre 1 e 4 alvos');
  const pattern=value.pattern.map(normalizeToken),targets=value.targets.map(normalizeToken);
  if(new Set(targets.map(x=>`${x.kind}:${x.value}`)).size!==targets.length)throw Error('Alvos repetidos');
@@ -26,21 +27,26 @@ export function matches(token,round){if(!round)return false;return token.kind===
 export function suffixMatches(history,tokens){if(history.length<tokens.length)return false;return tokens.every((t,i)=>matches(t,history[history.length-tokens.length+i]));}
 export function evolve(input,rule,history){
  const current=history.at(-1);if(!current)return {state:input,events:[]};
- const state={active:input?.active?{...input.active}:null,prealertRoundId:input?.prealertRoundId||null};
+ // V10: histórico incremental permite sequências maiores que a janela pública de resultados.
+ const previous=Array.isArray(input?.recent)?input.recent:[];
+ const recent=(previous.length?[...previous,current]:history.slice(-rule.pattern.length)).slice(-rule.pattern.length);
+ const state={active:input?.active?{...input.active}:null,prealertRoundId:input?.prealertRoundId||null,recent};
  const events=[];const add=(type,step=0)=>events.push({type,step,roundId:current.id,number:current.number,color:current.color||COLOR[current.number],minute_epoch:current.minute_epoch});
  // A saída sempre é avaliada APÓS a entrada — nunca sobre a mesma pedra.
  if(state.active&&state.active.entryRoundId!==current.id){
-  if(rule.targets.some(target=>matches(target,current))){add('win',state.active.step);state.active=null;}
+  // WIN: a cor alvo OU a pedra branca (0) para estratégias de cor.
+  const whiteWins=(current.color||COLOR[current.number])==='white'&&rule.targets.some(target=>target.kind==='color');
+  if(rule.targets.some(target=>matches(target,current))||whiteWins){add('win',state.active.step);state.active=null;}
   else if(state.active.step<rule.galeMax){state.active.step++;add(`gale${state.active.step}`,state.active.step);}
   else{add('red',state.active.step);state.active=null;}
  }
  if(state.active){if(state.prealertRoundId){add('cancel_prealert');state.prealertRoundId=null;}return {state,events};}
- const full=suffixMatches(history,rule.pattern);
+ const full=suffixMatches(state.recent,rule.pattern);
  if(full){
   if(state.prealertRoundId){add('clear_prealert');state.prealertRoundId=null;}
   add('entry');state.active={entryRoundId:current.id,step:0};
  }else{
-  const partial=suffixMatches(history,rule.pattern.slice(0,-1));
+  const partial=rule.pattern.length>1&&suffixMatches(state.recent,rule.pattern.slice(0,-1));
   if(state.prealertRoundId){add('cancel_prealert');state.prealertRoundId=null;}
   if(partial){add('prealert');state.prealertRoundId=current.id;}
  }
@@ -52,17 +58,26 @@ export const PRESET_MESSAGES=Object.freeze({
  gale1:'- - - - GALE 1 - - - -\nTentamos novamente na segunda rodada.',
  gale2:'- - - - GALE 2 - - - -\nÚltima tentativa configurada.',
  win:'✅ WIN — alvo confirmado na rodada registrada.',
+ winWhite:'✅ WIN NO BRANCO ⚪ — acerto na pedra branca.',
  red:'❌ RED — alvo não confirmado até o limite configurado.',
  brand:'🤖 BLAZE PRO NEXO PTG 🤖'
 });
 const colorText={white:'BRANCO ⚪',red:'VERMELHO 🔴',black:'PRETO ⚫'};
 export function tokenText(t){return t.kind==='color'?colorText[t.value]:String(t.value);}
+// V10: todas as mensagens de eventos observados exibem a pedra realmente sorteada.
+const roundEmoji={red:'🔴',black:'⚫',white:'⚪'};
 export function eventMessage(event,rule,templates=PRESET_MESSAGES){
  if(event.type==='clear_prealert'||event.type==='cancel_prealert')return '';
- const template=String(templates[event.type]??PRESET_MESSAGES[event.type]??'').slice(0,1200);
- return template.replaceAll('{NAME}',rule.name)
+ const kind=event.type==='win'&&event.color==='white'?'winWhite':event.type;
+ const template=String(templates[kind]??PRESET_MESSAGES[kind]??'').slice(0,1200);
+ const validNumber=Number.isInteger(event.number)&&event.number>=0&&event.number<=14;
+ const stone=validNumber?(roundEmoji[event.color||COLOR[event.number]]||'')+String(event.number):'';
+ const targets=rule.targets.map(tokenText);
+ if(rule.targets.some(t=>t.kind==='color'&&t.value!=='white')&&!rule.targets.some(t=>t.kind==='color'&&t.value==='white'))targets.push('BRANCO ⚪');
+ const main=template.replaceAll('{NAME}',rule.name)
   .replaceAll('{PATTERN}',rule.pattern.map(tokenText).join(' · '))
-  .replaceAll('{TARGET}',rule.targets.map(tokenText).join(' OU '))
-  .replaceAll('{GALE}',String(rule.galeMax))
-  +(templates.brand?`\n\n${String(templates.brand).slice(0,150)}`:'');
+  .replaceAll('{TARGET}',targets.join(' OU '))
+  .replaceAll('{GALE}',String(rule.galeMax)).replaceAll('{STONE}',stone);
+ const brand=templates.brand?`\n\n${String(templates.brand).slice(0,150)}`:'';
+ return main+brand+(stone&&!template.includes('{STONE}')?`\nPedra sorteada (${stone})`:'');
 }

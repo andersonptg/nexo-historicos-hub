@@ -1,12 +1,12 @@
 const $=id=>document.getElementById(id);
 const PREFS_KEY='nexo-historicos-v7-prefs';
-const types=['prealert','entry','gale1','gale2','win','red','brand'];
-const labels={prealert:'Pré-aviso',entry:'Entrada',gale1:'Gale 1',gale2:'Gale 2',win:'WIN ✅',red:'RED ❌',brand:'Assinatura'};
+const types=['prealert','entry','gale1','gale2','win','winWhite','red','brand'];
+const labels={prealert:'Pré-aviso',entry:'Entrada',gale1:'Gale 1',gale2:'Gale 2',win:'WIN ✅',winWhite:'WIN NO BRANCO ⚪',red:'RED ❌',brand:'Assinatura'};
 const colors={red:'Vermelho',black:'Preto',white:'Branco'};
-const defaultTemplates={prealert:'⚠️ Atenção, sinal identificado\nSequência parcial: {PATTERN}\nAguardando confirmação.',entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',gale1:'- - - - GALE 1 - - - -',gale2:'- - - - GALE 2 - - - -',win:'✅ WIN — alvo confirmado na rodada registrada.',red:'❌ RED — alvo não confirmado até o limite configurado.',brand:'🤖 BLAZE PRO NEXO PTG 🤖'};
+const defaultTemplates={prealert:'⚠️ Atenção, sinal identificado\nSequência parcial: {PATTERN}\nAguardando confirmação.',entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',gale1:'- - - - GALE 1 - - - -',gale2:'- - - - GALE 2 - - - -',win:'✅ WIN — alvo confirmado na rodada registrada.',winWhite:'✅ WIN NO BRANCO ⚪ — acerto na pedra branca.',red:'❌ RED — alvo não confirmado até o limite configurado.',brand:'🤖 BLAZE PRO NEXO PTG 🤖'};
 const api=async(url,opts={})=>{const r=await fetch(url,{credentials:'same-origin',cache:'no-store',...opts});const body=await r.json();if(!r.ok)throw Error(body.error||`HTTP ${r.status}`);return body;};
 const send=(path,method,data)=>api(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-let serverState=null,rules=[],editing=null,pattern=[],targets=[],editorMode='pattern',tokenKind='color',busy=false,prefs={},knownIds=new Set(),lastStone=null,firstBalls=true,lastEventSeq=0;
+let serverState=null,rules=[],editing=null,pattern=[],winColor='black',useNumbers=false,busy=false,prefs={},knownIds=new Set(),lastStone=null,firstBalls=true,lastEventSeq=0;
 try{prefs=JSON.parse(localStorage.getItem(PREFS_KEY)||'{}')}catch{}
 const emoji={red:'🔴',black:'⚫',white:'⚪'};
 const tokenText=t=>t.kind==='color'?emoji[t.value]:String(t.value);
@@ -19,26 +19,56 @@ function brasil(sec,kind='date'){
 }
 function flash(message,id='editorMsg',ok=false){const x=$(id);x.textContent=message;x.classList.toggle('good',ok);}
 function prefSave(){localStorage.setItem(PREFS_KEY,JSON.stringify(prefs));}
-function renderChip(target,token,index,kind){const b=document.createElement('button');b.className='seq-chip';b.type='button';b.title='Remover '+tokenText(token);
- if(token.kind==='color'){const spot=document.createElement('span');spot.className='token-visual '+token.value;b.append(spot);}else{b.append(document.createTextNode('#'));}
- b.append(document.createTextNode(token.kind==='color'?colors[token.value]:String(token.value)));
- b.onclick=()=>{const arr=kind==='pattern'?pattern:targets;arr.splice(index,1);renderBuilder();};target.append(b);
+// NEXO V10 - EDITOR DE PEDRAS: seleção de cores/números no mesmo campo.
+function makeStone(token,onclick=null,title=''){
+ const c=token.kind==='number'?colorOf(token.value):token.value;
+ const el=document.createElement(onclick?'button':'span');
+ el.className='stone-tile stone-'+c+(onclick?' clickable':'');
+ const circle=document.createElement('span');circle.className='stone-circle';
+ circle.textContent=token.kind==='number'?String(token.value):'';
+ el.append(circle);
+ if(onclick){el.type='button';el.onclick=onclick;el.title=title;el.setAttribute('aria-label',title);}
+ return el;
 }
-function renderBuilder(){for(const [id,values,kind] of [['patternChips',pattern,'pattern'],['targetChips',targets,'target']]){
- const node=$(id);node.textContent='';values.forEach((t,i)=>renderChip(node,t,i,kind));
- if(!values.length){const span=document.createElement('span');span.className='muted';span.textContent=kind==='pattern'?'Adicione de 2 a 12 pedras':'Escolha até 4 alvos (OU)';node.append(span);}
+function renderBuilder(){
+ const chips=$('patternChips');chips.textContent='';
+ pattern.forEach((token,index)=>chips.append(makeStone(token,()=>{pattern.splice(index,1);renderBuilder();},'Remover pedra '+(index+1))));
+ if(!pattern.length){const note=document.createElement('span');note.className='muted';note.textContent='Toque nas pedras abaixo para formar a sequência.';chips.append(note);}
+ $('patternCount').textContent=pattern.length+' pedra'+(pattern.length===1?'':'s');
+ $('useNumbers').checked=useNumbers;
+ const picker=$('stonePicker');picker.textContent='';
+ const palette=useNumbers?Array.from({length:15},(_,n)=>({kind:'number',value:n})):[{kind:'color',value:'red'},{kind:'color',value:'black'},{kind:'color',value:'white'}];
+ for(const token of palette)picker.append(makeStone(token,()=>addToken({...token}),'Adicionar '+(token.kind==='number'?'pedra '+token.value:colors[token.value])));
+ for(const b of document.querySelectorAll('#winPicker [data-win]')){
+  const chosen=b.dataset.win===winColor;b.classList.toggle('chosen',chosen);b.setAttribute('aria-pressed',String(chosen));
  }
- $('buildPattern').classList.toggle('selected',editorMode==='pattern');$('buildTarget').classList.toggle('selected',editorMode==='target');
- for(const [id,kind] of [['tabColors','color'],['tabNumbers','number'],['tabMixed','mixed']])$(id).classList.toggle('selected',tokenKind===kind);
- $('colorPicker').classList.toggle('hidden',tokenKind==='number');$('numberPicker').classList.toggle('hidden',tokenKind==='color');
- $('saveRule').textContent=editing?'Salvar alterações':'＋ Salvar estratégia';$('editorHeading').textContent=editing?'Editar sequência':'Nova sequência';
+ const target=$('targetChips');target.textContent='';
+ const arrow=document.createElement('span');arrow.className='equal-sign';arrow.textContent='=';target.append(arrow);
+ target.append(makeStone({kind:'color',value:winColor}));
+ if(winColor!=='white'){
+  const or=document.createElement('span');or.className='or-sign';or.textContent='OU';target.append(or);
+  target.append(makeStone({kind:'color',value:'white'}));
+ }
+ $('saveRule').textContent=editing?'Salvar alterações':'＋ Salvar estratégia';
+ $('editorHeading').textContent=editing?'Editar sequência':'Nova sequência';
 }
-function addToken(token){const list=editorMode==='pattern'?pattern:targets,limit=editorMode==='pattern'?12:4;if(list.length>=limit){flash('Limite máximo: '+limit+' elementos');return;}list.push(token);renderBuilder();flash('');}
-function resetEditor(){editing=null;pattern=[];targets=[];$('ruleName').value='Minha estratégia';$('galeMax').value='0';$('ruleEnabled').checked=true;renderBuilder();flash('');}
-function editorRule(){return {name:$('ruleName').value.trim(),pattern:[...pattern],targets:[...targets],galeMax:Number($('galeMax').value),enabled:$('ruleEnabled').checked};}
-function validClient(r){if(!r.name||r.name.length>70)throw Error('Informe um nome de até 70 caracteres');if(r.pattern.length<2||r.pattern.length>12)throw Error('Use de 2 a 12 pedras');if(r.targets.length<1||r.targets.length>4)throw Error('Escolha de 1 a 4 alvos');return r;}
-function loadEditor(r){editing=r.id;pattern=r.pattern.map(x=>({...x}));targets=r.targets.map(x=>({...x}));$('ruleName').value=r.name;$('galeMax').value=String(r.galeMax);$('ruleEnabled').checked=r.enabled;renderBuilder();$('editorHeading').scrollIntoView({behavior:'smooth',block:'center'});}
-function appendTokenList(parent,items){for(const token of items){const chip=document.createElement('span');chip.className='seq-chip';if(token.kind==='color'){const c=document.createElement('span');c.className='token-visual '+token.value;chip.append(c);}else chip.textContent='#';chip.append(document.createTextNode(token.kind==='color'?colors[token.value]:String(token.value)));parent.append(chip);}}
+function addToken(token){
+ // 500 pedras de memória por regra; o motor acumula resultados entre coletas.
+ if(pattern.length>=500){flash('Limite técnico de 500 pedras por sequência.');return;}
+ pattern.push(token);renderBuilder();flash('');
+}
+function resetEditor(){editing=null;pattern=[];winColor='black';useNumbers=false;$('ruleName').value='Minha estratégia';$('galeMax').value='0';$('ruleEnabled').checked=true;renderBuilder();flash('');}
+function editorRule(){return {name:$('ruleName').value.trim(),pattern:[...pattern],targets:[{kind:'color',value:winColor}],galeMax:Number($('galeMax').value),enabled:$('ruleEnabled').checked};}
+function validClient(r){if(!r.name||r.name.length>70)throw Error('Informe um nome de até 70 caracteres');if(r.pattern.length<1||r.pattern.length>500)throw Error('Use entre 1 e 500 pedras');if(r.targets.length!==1||r.targets[0].kind!=='color')throw Error('Escolha uma cor para WIN');return r;}
+function loadEditor(r){
+ editing=r.id;pattern=r.pattern.map(x=>({...x}));
+ const first=r.targets.find(x=>x.kind==='color')||r.targets[0];winColor=first?.kind==='color'?first.value:colorOf(first?.value??8);
+ useNumbers=pattern.some(x=>x.kind==='number');
+ $('ruleName').value=r.name;$('galeMax').value=String(r.galeMax);$('ruleEnabled').checked=r.enabled;
+ renderBuilder();flash(r.targets.length>1?'Esta regra antiga tem vários alvos. Ao salvar, será utilizada a cor selecionada mais o branco.':'');
+ $('editorHeading').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function appendTokenList(parent,items){for(const token of items)parent.append(makeStone(token));}
 function button(label,fn,clazz=''){const btn=document.createElement('button');btn.textContent=label;btn.type='button';btn.className=clazz;btn.onclick=fn;return btn;}
 async function safe(action,errorId='editorMsg'){try{await action();}catch(e){flash(e.message,errorId);}}
 function drawRules(){const host=$('strategies');host.textContent='';$('strategyCount').textContent=String(rules.length);
@@ -46,7 +76,7 @@ function drawRules(){const host=$('strategies');host.textContent='';$('strategyC
  for(const rule of rules){const card=document.createElement('div');card.className='rule-card';
  const top=document.createElement('div');top.className='rule-top';const name=document.createElement('strong');name.textContent=rule.name;
  const status=document.createElement('span');status.textContent=rule.enabled?'● Ativa':'○ Pausada';status.className='rule-status'+(rule.enabled?' on':'');top.append(name,status);
- const seq=document.createElement('div');seq.className='rule-seq';appendTokenList(seq,rule.pattern);seq.append(document.createTextNode(' = '));appendTokenList(seq,rule.targets);
+ const seq=document.createElement('div');seq.className='rule-seq';appendTokenList(seq,rule.pattern);seq.append(document.createTextNode(' = '));appendTokenList(seq,rule.targets);if(rule.targets.some(x=>x.kind==='color')&&!rule.targets.some(x=>x.kind==='color'&&x.value==='white')){seq.append(document.createTextNode(' OU '));appendTokenList(seq,[{kind:'color',value:'white'}]);}
  const sub=document.createElement('p');sub.className='rule-extra';sub.textContent=`Gale máximo: ${rule.galeMax} · Estratégia local sem apostas · Fonte Smash Double`;
  const actions=document.createElement('div');actions.className='rule-actions';
  actions.append(button('✎ Editar',()=>loadEditor(rule)),button(rule.enabled?'⏸ Pausar':'▶ Ativar',()=>safe(async()=>{await send(`/api/strategies/${rule.id}`,'PUT',{...rule,enabled:!rule.enabled});await loadState(false);})),button('▣ Duplicar',()=>safe(async()=>{await send('/api/strategies','POST',{...rule,name:(rule.name+' (cópia)').slice(0,70),enabled:false});await loadState(false);})),button('✕ Excluir',()=>safe(async()=>{if(!confirm('Excluir esta estratégia e seus eventos históricos?'))return;await api(`/api/strategies/${rule.id}`,{method:'DELETE'});await loadState(false);},'editorMsg'),'danger'));
@@ -117,11 +147,10 @@ function initHandlers(){
  $('logout').onclick=()=>safe(async()=>{await api('/api/admin/logout',{method:'POST'});showLogin('Sessão encerrada.');});
  for(const key of ['automatic','prealert','entry','fireworks'])$(key).onchange=()=>safe(()=>changeSetting(key),'saveMsg');
  for(const key of ['order','flow','clock'])$(key).onchange=()=>{prefs[key]=$(key).value;prefSave();readBalls();};
- $('removeLast').onclick=()=>{pattern.pop();renderBuilder();};$('clearPattern').onclick=()=>{pattern=[];renderBuilder();};$('clearTargets').onclick=()=>{targets=[];renderBuilder();};
- $('buildPattern').onclick=()=>{editorMode='pattern';renderBuilder();};$('buildTarget').onclick=()=>{editorMode='target';renderBuilder();};
- for(const [id,kind] of [['tabColors','color'],['tabNumbers','number'],['tabMixed','mixed']])$(id).onclick=()=>{tokenKind=kind;renderBuilder();};
- document.querySelectorAll('[data-color]').forEach(b=>b.onclick=()=>addToken({kind:'color',value:b.dataset.color}));
- const pad=$('numberPicker');for(let n=0;n<=14;n++)pad.append(button(String(n),()=>addToken({kind:'number',value:n})));
+ $('removeLast').onclick=()=>{pattern.pop();renderBuilder();};
+ $('clearPattern').onclick=()=>{pattern=[];renderBuilder();};
+ $('useNumbers').onchange=()=>{useNumbers=$('useNumbers').checked;renderBuilder();};
+ document.querySelectorAll('#winPicker [data-win]').forEach(b=>b.onclick=()=>{winColor=b.dataset.win;renderBuilder();});
  $('newRule').onclick=resetEditor;
  $('saveRule').onclick=()=>safe(async()=>{const rule=validClient(editorRule());await send(editing?'/api/strategies/'+editing:'/api/strategies',editing?'PUT':'POST',rule);resetEditor();await loadState(false);flash('Estratégia salva no banco D1.','editorMsg',true);});
  $('loadExamples').onclick=()=>safe(async()=>{
@@ -131,7 +160,7 @@ function initHandlers(){
    await loadState(false);flash('Exemplos cadastrados, inicialmente pausados.','editorMsg',true);
  });
  $('reload').onclick=()=>safe(()=>loadState(false),'editorMsg');
- $('saveTemplates').onclick=()=>safe(async()=>{const t=Object.fromEntries(types.map(k=>[k,$('template-'+k).value]));await send('/api/strategies/settings','PUT',{templates:t});await loadState(false);flash('Mensagens salvas. Telegram ainda não conectado.','templateMsg',true);},'templateMsg');
+ $('saveTemplates').onclick=()=>safe(async()=>{const t=Object.fromEntries(types.map(k=>[k,$('template-'+k).value]));await send('/api/strategies/settings','PUT',{templates:t});await loadState(false);flash('Mensagens salvas para o painel e Telegram.','templateMsg',true);},'templateMsg');
  $('simulate').onclick=()=>safe(async()=>{const values=$('demoRounds').value.split(',').map(x=>x.trim()).filter(Boolean).map(Number);if(!values.length)throw Error('Insira números separados por vírgulas');const result=await send('/api/strategies/demo','POST',{rule:validClient(editorRule()),rounds:values,templates:serverState?.settings?.templates});$('demoOutput').textContent=result.events.length?result.events.map(e=>`${e.type.toUpperCase()}: ${e.message||'Limpeza do aviso'}`).join('\n\n'):'Nenhum padrão identificado nesta sequência.';},'editorMsg');
  renderBuilder();
 }
