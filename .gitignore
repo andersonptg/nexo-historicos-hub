@@ -1,0 +1,10 @@
+node_modules/
+.dev.vars
+.env*
+.wrangler/
+*.sqlite3
+*.db
+*.sql.bak
+*_token*
+historico_v4.sql
+.DS_Store

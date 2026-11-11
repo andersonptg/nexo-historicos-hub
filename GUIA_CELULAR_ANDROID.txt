@@ -1,0 +1,23 @@
+NEXO HISTÓRICOS HUB — GUIA PARA ANDROID (SEM PC)
+
+O ZIP já contém o SITE, o SERVIDOR Worker, o banco (SQL), testes e publicação automática.
+
+1) NÃO APAGUE O PROJETO NEXO SOCIAL E NÃO MEXA NO COLETOR LOCAL V4.
+2) No Termux, faça backup:
+   cp ~/smash_coletor/smash_historico.sqlite3 ~/storage/downloads/SMASH_BACKUP_V4.sqlite3
+3) Descompacte este ZIP em uma pasta nova (não sobrescreva smash_coletor).
+4) Opção facilitada com Termux: instale git/gh e execute scripts/PUBLICAR_NO_GITHUB_TERMUX.sh
+   O próprio GitHub pedirá autorização no navegador e criará um repositório NOVO.
+   Se preferir, crie manualmente um repositório separado chamado nexo-historicos-hub e envie os arquivos.
+5) Na Cloudflare, crie D1 nexo-historicos-hub e copie o ID do banco.
+6) Cole esse ID no wrangler.jsonc do repositório, no lugar do valor placeholder.
+7) No repositório GitHub, configure como Actions Secrets:
+   CLOUDFLARE_API_TOKEN
+   CLOUDFLARE_ACCOUNT_ID
+8) Vá à aba Actions e execute Publicar NEXO Históricos no Cloudflare.
+9) Abra a URL workers.dev gerada. Confira status e grade.
+
+ATENÇÃO: 5 segundos é apenas a verificação do painel. A coleta consulta a fonte uma vez por minuto.
+Essa fonte pode atrasar ou bloquear consultas automatizadas. Não garante pedra a cada 30 segundos.
+A automação depende de autorização de uso da fonte, serviço de nuvem ativo e limites do plano.
+As demais plataformas ainda não foram integradas.

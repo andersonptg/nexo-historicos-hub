@@ -1,0 +1,12 @@
+{
+  "name": "nexo-historicos-hub",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "triggers": { "crons": ["* * * * *"] },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "nexo-historicos-hub",
+    "database_id": "COLE_AQUI_O_ID_DO_SEU_D1"
+  }]
+}
