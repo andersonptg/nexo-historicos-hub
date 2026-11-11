@@ -46,3 +46,20 @@ CREATE TABLE IF NOT EXISTS collection_leases (
   next_allowed INTEGER NOT NULL DEFAULT 0,
   started_at INTEGER NOT NULL DEFAULT 0
 );
+
+-- NEXO V7: resultados de multiplicadores sem forçar um valor Crash no formato 0-14.
+CREATE TABLE IF NOT EXISTS multiplier_rounds (
+ id TEXT PRIMARY KEY, platform TEXT NOT NULL, game TEXT NOT NULL,
+ value TEXT NOT NULL, numeric_value REAL NOT NULL,
+ minute_epoch INTEGER NOT NULL, source TEXT NOT NULL, first_seen INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_multiplier_results ON multiplier_rounds(platform,game,minute_epoch DESC);
+-- Estado configurável por administrador; nenhuma credencial em tabelas.
+CREATE TABLE IF NOT EXISTS source_controls (
+ source_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1,
+ updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admin_login_attempts (
+ key TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0,
+ blocked_until INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
+);

@@ -1,5 +1,7 @@
 import {reconcileSnapshot} from './parser.js';
-import {ENABLED_SOURCES,PLATFORMS} from './sources/index.js';
+import {ENABLED_SOURCES,PLATFORMS,sourceFor,catalogGame} from './sources/index.js';
+import {collectMultiplier,queryMultiplier,exportMultiplier} from './multi.js';
+import {adminHandler,sourceEnabled} from './admin.js';
 const HEADERS = {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
 const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:HEADERS});
 const stamp=()=>Math.floor(Date.now()/1000);
@@ -16,7 +18,7 @@ async function collect(env,source=ENABLED_SOURCES[0]){
  await db.prepare(`INSERT INTO sync_status(source_id,last_attempt,message) VALUES(?,?,?)
    ON CONFLICT(source_id) DO UPDATE SET last_attempt=excluded.last_attempt,message=excluded.message`).bind(source.id,started,'Consultando fonte').run();
  try{
-  const resp=await fetch(source.url, {headers:{'Accept':'text/html','User-Agent':'Mozilla/5.0 (compatible; NexoHistoricos/1.0; public monitoring)'},redirect:'follow',signal:AbortSignal.timeout(14000)});
+  const resp=await fetch(source.url, {headers:{'Accept':'text/html','Cache-Control':'no-cache','User-Agent':'Mozilla/5.0 (compatible; NexoHistoricos/1.0; public monitoring)'},cf:{cacheTtl:0},redirect:'follow',signal:AbortSignal.timeout(14000)});
   if(!resp.ok)throw new Error(`Fonte pública HTTP ${resp.status}`);
   const len=Number(resp.headers.get('content-length')||0);
   if(len>2_000_000)throw new Error('HTML acima de 2MB');
@@ -33,7 +35,7 @@ async function collect(env,source=ENABLED_SOURCES[0]){
   const known=new Set(mapped.filter(Boolean));
   const newRows=[];
   for(let i=0;i<records.length;i++)if(!mapped[i]){
-    let uid='public:'+crypto.randomUUID();
+    let uid=`public:${started}:${String(999-i).padStart(3,'0')}:${crypto.randomUUID()}`;
     while(known.has(uid))uid='public:'+crypto.randomUUID();
     mapped[i]=uid;known.add(uid);
     newRows.push({...records[i],id:uid});
@@ -69,6 +71,7 @@ async function collect(env,source=ENABLED_SOURCES[0]){
 // Uma coleta no maximo a cada 20 s por fonte, mesmo com varias abas ou visitantes.
 // O bloqueio fica no D1 e nao depende da memoria de cada servidor Cloudflare.
 async function guardedCollect(env,source=ENABLED_SOURCES[0]){
+ if(!(await sourceEnabled(env,source)))return {ok:true,paused:true};
  const now=stamp();
  await env.DB.prepare('INSERT OR IGNORE INTO collection_leases(source_id,next_allowed,started_at) VALUES(?,?,?)')
    .bind(source.id,0,0).run();
@@ -76,7 +79,7 @@ async function guardedCollect(env,source=ENABLED_SOURCES[0]){
    WHERE source_id=? AND next_allowed<=?`)
    .bind(now+20,now,source.id,now).run();
  if(Number(claim.meta?.changes||0)!==1)return {ok:true,skipped:true};
- return collect(env,source);
+ return source.type==='multiplier'?collectMultiplier(env,source):collect(env,source);
 }
 
 async function queryResults(env,url){
@@ -96,8 +99,20 @@ async function queryResults(env,url){
  if(from && /^\d{9,11}$/.test(from)){clauses.push('minute_epoch>=?');params.push(Number(from));}
  if(to && /^\d{9,11}$/.test(to)){clauses.push('minute_epoch<=?');params.push(Number(to));}
  const where=clauses.join(' AND ');
+ const order=url.searchParams.get('order')==='asc'?'ASC':'DESC';
  const rows=(await env.DB.prepare(`SELECT id,platform,game,number,color,minute_epoch,official_period,exact_epoch,precision,source
-   FROM rounds WHERE ${where} ORDER BY minute_epoch DESC,id DESC LIMIT ? OFFSET ?`).bind(...params,limit,offset).all()).results;
+   FROM rounds WHERE ${where} ORDER BY minute_epoch ${order},id ${order} LIMIT ? OFFSET ?`).bind(...params,limit,offset).all()).results;
+ // Ordens reais das pedras com mesmo minuto vêm do snapshot público, não do UUID.
+ if(offset===0&&limit>1&&rows.length){
+  const snap=await env.DB.prepare('SELECT payload FROM snapshot_cache WHERE source_id=?')
+   .bind(`historicosblaze:${platform}:${game}`).first();
+  if(snap?.payload){
+   const rank=new Map(JSON.parse(snap.payload).map((x,i)=>[x.round_id,i]));
+   rows.sort((a,b)=>a.minute_epoch!==b.minute_epoch
+    ? (order==='ASC'?a.minute_epoch-b.minute_epoch:b.minute_epoch-a.minute_epoch)
+    : (rank.has(a.id)&&rank.has(b.id)?(order==='ASC'?rank.get(b.id)-rank.get(a.id):rank.get(a.id)-rank.get(b.id)):0));
+  }
+ }
  const found=url.searchParams.get('no_count')==='1'?null:await env.DB.prepare(`SELECT COUNT(*) AS total,SUM(CASE WHEN color='red' THEN 1 ELSE 0 END) AS red,SUM(CASE WHEN color='black' THEN 1 ELSE 0 END) AS black,SUM(CASE WHEN color='white' THEN 1 ELSE 0 END) AS white FROM rounds WHERE ${where}`).bind(...params).first();
  return json({items:rows,counts:found,checked_at:stamp(),offset,limit});
 }
@@ -105,7 +120,7 @@ async function exportCsv(env,url){
  const platform=url.searchParams.get('platform')||'smash';
  const game=url.searchParams.get('game')||'double';
  const precision=url.searchParams.get('precision')||'minute';
- if(!['minute','second'].includes(precision)||!['smash','brabet','blitz'].includes(platform)||game!=='double')return json({error:'Filtro inválido'},400);
+ if(!['minute','second'].includes(precision)||!/^[a-z0-9-]{1,40}$/.test(platform)||game!=='double')return json({error:'Filtro inválido'},400);
  const rows=(await env.DB.prepare('SELECT number,color,minute_epoch,official_period,exact_epoch,source FROM rounds WHERE platform=? AND game=? AND precision=? ORDER BY minute_epoch DESC LIMIT 5000').bind(platform,game,precision).all()).results;
  const esc=x=>'"'+String(x??'').replace(/"/g,'""')+'"';
  const out='numero,cor,minuto_epoch,periodo_oficial,segundo_exato_epoch,origem\n'+rows.map(x=>[x.number,x.color,x.minute_epoch,x.official_period,x.exact_epoch,x.source].map(esc).join(',')).join('\n');
@@ -116,10 +131,22 @@ export default {
  async fetch(request,env,ctx){
   const url=new URL(request.url), path=url.pathname;
   try {
-   if(path==='/api/platforms')return json(PLATFORMS);
+   if(path==='/admin')return Response.redirect(url.origin+'/admin.html',302);
+   if(path.startsWith('/api/admin/'))return adminHandler(request,env,url);
+   if(path==='/api/platforms'||path==='/api/catalog')return json(PLATFORMS);
+   if(path==='/api/version'){
+    const source=sourceFor(url.searchParams.get('platform')||'smash',url.searchParams.get('game')||'double');
+    if(!source)return json({connected:false,version:null});
+    const row=await env.DB.prepare('SELECT last_success,last_new FROM sync_status WHERE source_id=?').bind(source.id).first();
+    return json({connected:true,version:row?.last_success||0,changed:row?.last_new||0});
+   }
    if(path==='/api/status'){
-    const source=ENABLED_SOURCES.find(s=>s.platform===(url.searchParams.get('platform')||'smash') && s.game===(url.searchParams.get('game')||'double'));
-    return json({source:source?.id||null,source_url:source?.url||null,cron_interval_seconds:60,ui_interval_seconds:5,active_collection_minimum_seconds:20,kind:'third-party-public',status:source?await readSync(env.DB,source):null,now:stamp()});
+    const platform=url.searchParams.get('platform')||'smash',game=url.searchParams.get('game')||'double';
+    const source=sourceFor(platform,game),entry=catalogGame(platform,game);
+    return json({source:source?.id||null,source_url:source?.url||entry?.public_url||null,
+      connected:!!source,game_kind:entry?.kind||'pending',enabled:source?await sourceEnabled(env,source):false,
+      cron_interval_seconds:60,ui_interval_seconds:5,active_collection_minimum_seconds:20,
+      precision_available:'minute',kind:'third-party-public',status:source?await readSync(env.DB,source):null,now:stamp()});
    }
    if(path==='/api/tick'&&request.method==='POST'){
     // A interface so pode acionar coletas da propria origem.
@@ -127,20 +154,35 @@ export default {
     const site=request.headers.get('Sec-Fetch-Site');
     if((origin&&origin!==url.origin)||(site&&site!=='same-origin'&&site!=='none'))
       return json({error:'Origem nao permitida'},403);
-    ctx.waitUntil(guardedCollect(env));
-    return json({ok:true,queued:true,minimum_interval_seconds:20},202);
+    const platform=url.searchParams.get('platform')||'smash',game=url.searchParams.get('game')||'double';
+    const source=sourceFor(platform,game);
+    if(!source)return json({error:'Fonte ainda não integrada'},409);
+    ctx.waitUntil(guardedCollect(env,source));
+    return json({ok:true,queued:true,source:source.id,minimum_interval_seconds:20},202);
    }
-   if(path==='/api/results')return await queryResults(env,url);
-   if(path==='/api/export.csv')return await exportCsv(env,url);
+   if(path==='/api/results'){
+    const p=url.searchParams.get('platform')||'smash',g=url.searchParams.get('game')||'double';
+    const source=sourceFor(p,g);
+    if(!source)return json({error:'Aguardando integração desta fonte',items:[],counts:{total:0,red:0,black:0,white:0}},409);
+    return source.type==='multiplier'?queryMultiplier(env,url):queryResults(env,url);
+   }
+   if(path==='/api/export.csv'){
+    const p=url.searchParams.get('platform')||'smash',g=url.searchParams.get('game')||'double';
+    const source=sourceFor(p,g);
+    if(!source)return json({error:'Aguardando integração'},409);
+    return source.type==='multiplier'?exportMultiplier(env,url):exportCsv(env,url);
+   }
    if(path==='/api/health')return json({ok:true,server:stamp()});
-   if(path==='/api/sync'&&request.method==='POST'){
-    if(!env.ADMIN_TOKEN)return json({error:'Sincronização manual não configurada'},503);
-    if(request.headers.get('X-Admin-Token')!==env.ADMIN_TOKEN)return json({error:'Não autorizado'},401);
-    return json(await collect(env));
-   }
    if(path.startsWith('/api/'))return json({error:'Rota não encontrada'},404);
    return env.ASSETS.fetch(request);
   } catch(e){return json({error:'Erro no servidor',detail:String(e.message||e).slice(0,180)},500);}
  },
- async scheduled(controller,env,ctx){for(const source of ENABLED_SOURCES)ctx.waitUntil(guardedCollect(env,source));}
+ async scheduled(controller,env,ctx){
+  // Smash Double tem coleta de referência a cada minuto. Outros jogos rodam
+  // em rodízio para respeitar os limites gratuitos e a fonte externa.
+  const primary=sourceFor('smash','double');
+  const others=ENABLED_SOURCES.filter(x=>x!==primary);
+  const turn=others.length?others[Math.floor(Date.now()/60000)%others.length]:null;
+  for(const s of [primary,turn])if(s)ctx.waitUntil(guardedCollect(env,s));
+ }
 };

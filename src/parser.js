@@ -86,3 +86,36 @@ export function reconcileSnapshot(previous, current) {
   for(let k=0;k<n;k++) if(!ids[k]&&countsA.get(b[k])===1&&countsB.get(b[k])===1) ids[k]=oldIndex.get(b[k]);
   return ids;
 }
+
+// Históricos Crash/Aviator públicos exibem valores como 2.32x seguidos de HH:mm.
+// Não converte minutos em falsos segundos/milissegundos.
+export function parseMultiplierHtml(html, nowEpoch = Math.floor(Date.now()/1000)) {
+ if(typeof html!=='string'||html.length<200)throw new Error('HTML público vazio');
+ const tokens=visibleTokens(html);
+ const i=tokens.findIndex(x=>PUBLIC_MARKERS.has(x.toLowerCase()));
+ if(i<0)throw new Error('Marcador da área pública ausente');
+ const pairs=[];
+ for(let p=i+1;p+1<tokens.length&&pairs.length<200;p+=2){
+  const raw=tokens[p].trim().replace(',','.');
+  const clock=tokens[p+1];
+  if(!/^\d+(?:\.\d{1,4})?x$/i.test(raw)||!TIME_RE.test(clock))break;
+  const numeric=Number(raw.slice(0,-1));
+  if(!Number.isFinite(numeric)||numeric<=0||numeric>1000000)break;
+  pairs.push({number:raw.toLowerCase(),value:raw.toLowerCase(),numeric_value:numeric,clock});
+ }
+ if(pairs.length<8)throw new Error(`Somente ${pairs.length} multiplicadores válidos encontrados`);
+ const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(nowEpoch*1000));
+ const v=k=>Number(parts.find(x=>x.type===k).value);
+ let day=Date.UTC(v('year'),v('month')-1,v('day'))/1000;
+ let prev=Infinity;const out=[];
+ for(const x of pairs){
+  const [h,m]=x.clock.split(':').map(Number);
+  let when=day+h*3600+m*60+3*3600;
+  if((prev===Infinity&&when>nowEpoch+180)||(prev!==Infinity&&when>prev)){
+   day-=86400;when-=86400;
+  }
+  prev=when;
+  out.push({minute_epoch:when,number:x.number,value:x.value,numeric_value:x.numeric_value});
+ }
+ return out;
+}
