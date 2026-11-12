@@ -1,10 +1,10 @@
 const $=id=>document.getElementById(id);
 const PREFS_KEY='nexo-historicos-v7-prefs';
-const types=['activation','prealert','entry','gale1','gale2','win','winWhite','red','brand'];
+const types=['activation','prealert','entry','entryRed','entryBlack','gale1','gale2','win','winWhite','red','brand'];
 const mediaTypes=['activation','prealert','entry','gale1','gale2','win','winWhite','red'];
-const labels={activation:'🚀 Ativação — ao ligar o robô (uma vez)',prealert:'🔍 ATENÇÃO — antes da entrada (apagar após confirmação)',entry:'Entrada',gale1:'Gale 1',gale2:'Gale 2',win:'WIN ✅',winWhite:'WIN NO BRANCO ⚪',red:'RED ❌',brand:'Assinatura'};
+const labels={activation:'🚀 Ativação — ao ligar o robô (uma vez)',prealert:'🔍 ATENÇÃO — antes da entrada (apagar após confirmação)',entry:'Entrada (modelo geral / compatibilidade)',entryRed:'🔴 Entrada no vermelho — texto independente',entryBlack:'⚫ Entrada no preto — texto independente',gale1:'Gale 1',gale2:'Gale 2',win:'WIN ✅',winWhite:'WIN NO BRANCO ⚪',red:'RED ❌',brand:'Assinatura'};
 const colors={red:'Vermelho',black:'Preto',white:'Branco'};
-const defaultTemplates={activation:'🚨 ATENÇÃO — ROBÔ ATIVADO!\n🤖 BLAZE PRO NEXO PTG 🤖',prealert:'🔎 Pré-aviso de sequência\nSequência parcial: {PATTERN}\nAguardando confirmação.',entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',gale1:'- - - - GALE 1 - - - -',gale2:'- - - - GALE 2 - - - -',win:'✅ WIN — alvo confirmado na rodada registrada.',winWhite:'✅ WIN NO BRANCO ⚪ — acerto na pedra branca.',red:'❌ RED — alvo não confirmado até o limite configurado.',brand:'🤖 BLAZE PRO NEXO PTG 🤖'};
+const defaultTemplates={activation:'🚨 ATENÇÃO — ROBÔ ATIVADO!\n🤖 BLAZE PRO NEXO PTG 🤖',prealert:'🔎 Pré-aviso de sequência\nSequência parcial: {PATTERN}\nAguardando confirmação.',entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',entryRed:'🎯 ENTRAR NO VERMELHO 🔴 OU BRANCO ⚪\n\n- - - - SINAL ATÉ GALE {GALE} - - - -',entryBlack:'🎯 ENTRAR NO PRETO ⚫ OU BRANCO ⚪\n\n- - - - SINAL ATÉ GALE {GALE} - - - -',gale1:'- - - - GALE 1 - - - -',gale2:'- - - - GALE 2 - - - -',win:'✅ WIN — alvo confirmado na rodada registrada.',winWhite:'✅ WIN NO BRANCO ⚪ — acerto na pedra branca.',red:'❌ RED — alvo não confirmado até o limite configurado.',brand:'🤖 BLAZE PRO NEXO PTG 🤖'};
 const api=async(url,opts={})=>{const r=await fetch(url,{credentials:'same-origin',cache:'no-store',...opts});const body=await r.json();if(!r.ok)throw Error(body.error||`HTTP ${r.status}`);return body;};
 const send=(path,method,data)=>api(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
 let serverState=null,rules=[],editing=null,pattern=[],winColor='black',useNumbers=false,busy=false,prefs={},knownIds=new Set(),lastStone=null,firstBalls=true,lastEventSeq=0;
@@ -199,7 +199,7 @@ function initHandlers(){
  $('useNumbers').onchange=()=>{useNumbers=$('useNumbers').checked;renderBuilder();};
  document.querySelectorAll('#winPicker [data-win]').forEach(b=>b.onclick=()=>{winColor=b.dataset.win;renderBuilder();});
  $('newRule').onclick=resetEditor;
- $('saveRule').onclick=()=>safe(async()=>{const rule=validClient(editorRule());await send(editing?'/api/strategies/'+editing:'/api/strategies',editing?'PUT':'POST',rule);resetEditor();await loadState(false);flash('Estratégia salva no banco D1.','editorMsg',true);});
+ $('saveRule').onclick=()=>safe(async()=>{const rule=validClient(editorRule());await send(editing?'/api/strategies/'+editing:'/api/strategies',editing?'PUT':'POST',rule);await loadState(false);const saved=rules.find(r=>r.name===rule.name&&r.galeMax===rule.galeMax&&JSON.stringify(r.pattern)===JSON.stringify(rule.pattern));if(saved){loadEditor(saved);flash('Estratégia salva e confirmada no D1. Limite: GALE '+saved.galeMax+'.','editorMsg',true);}else{flash('Estratégia enviada; confira o limite na lista de estratégias.','editorMsg',true);}});
  $('loadExamples').onclick=()=>safe(async()=>{
    if(!confirm('Adicionar as duas sequências de exemplo ao seu banco (pausadas)?'))return;
    for(const [name,nums,target] of [['Branco, vermelha, vermelha, preta, preta',[0,1,1,8,8],'red'],['Branco e quatro vermelhas',[0,1,1,1,1],'black']])

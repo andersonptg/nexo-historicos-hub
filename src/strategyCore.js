@@ -55,6 +55,8 @@ export function evolve(input,rule,history){
 export const PRESET_MESSAGES=Object.freeze({
  prealert:'🔎 Pré-aviso de sequência\nSequência parcial: {PATTERN}\nAguardando confirmação.',
  entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',
+ entryRed:'🎯 ENTRAR NO VERMELHO 🔴 OU BRANCO ⚪\n\n- - - - SINAL ATÉ GALE {GALE} - - - -',
+ entryBlack:'🎯 ENTRAR NO PRETO ⚫ OU BRANCO ⚪\n\n- - - - SINAL ATÉ GALE {GALE} - - - -',
  gale1:'- - - - GALE 1 - - - -',
  gale2:'- - - - GALE 2 - - - -',
  win:'✅ WIN — alvo confirmado na rodada registrada.',
@@ -70,7 +72,10 @@ const roundEmoji={red:'🔴',black:'⚫',white:'⚪'};
 export function eventMessage(event,rule,templates=PRESET_MESSAGES){
  if(event.type==='clear_prealert'||event.type==='cancel_prealert')return '';
  const kind=event.type==='win'&&event.color==='white'?'winWhite':event.type;
- const template=String(templates[kind]??PRESET_MESSAGES[kind]??'').slice(0,1200);
+ const entryColor=rule.targets.find(t=>t.kind==='color'&&(t.value==='red'||t.value==='black'))?.value;
+ const colorKind=event.type==='entry'&&entryColor?(entryColor==='red'?'entryRed':'entryBlack'):null;
+ const chosen=colorKind&&templates[colorKind]!==undefined?templates[colorKind]:templates[kind];
+ const template=String(chosen??PRESET_MESSAGES[colorKind]??PRESET_MESSAGES[kind]??'').slice(0,1200);
  const validNumber=Number.isInteger(event.number)&&event.number>=0&&event.number<=14;
  const stone=validNumber?(roundEmoji[event.color||COLOR[event.number]]||'')+String(event.number):'';
  const targets=rule.targets.map(tokenText);
