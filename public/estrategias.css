@@ -16,3 +16,14 @@
 .win-picker{display:flex;align-items:center;gap:16px;margin:16px 0}.win-preview{background:#16273b;border-style:solid}.win-preview .equal-sign,.win-preview .or-sign{font-weight:800;color:#95dcea}.target-section{border-top:1px solid #354661;margin-top:20px;padding-top:4px}.target-section .sequence-label{margin-top:16px}
 .rule-seq .stone-tile{width:39px;height:40px;min-width:39px;border-radius:8px}.rule-seq .stone-circle{width:28px;height:28px;font-size:12px;border-width:2px}
 @media(max-width:620px){.stone-composer{padding:12px}.stone-picker{grid-template-columns:repeat(5,minmax(0,1fr));gap:7px}.stone-picker .stone-tile{margin:auto}.stone-tile{width:43px;min-width:43px;height:46px}.stone-circle{width:32px;height:32px}.stone-line{gap:6px;padding:9px}.number-toggle{padding:10px}}
+
+/* V11 – Texto e GIF / sticker no mesmo campo, adaptável a Android. */
+.telegram-event-panel{margin-top:22px;padding-top:12px;border-top:1px solid #435675}
+.telegram-event-panel h3{margin:8px 0 4px;font-size:20px}
+.telegram-event-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:18px}
+.telegram-event-card{padding:15px;border:1px solid #3a516d;border-radius:13px;background:#102038;min-width:0}
+.telegram-event-card>label,.telegram-media-fields label{display:flex;flex-direction:column;gap:8px;font-size:13px;font-weight:700;color:#d8e8f8}
+.telegram-event-card textarea{width:100%;min-height:75px;margin-top:4px;resize:vertical;padding:12px;border:1px solid #455b78;border-radius:9px;background:#0b1629;color:#fff;line-height:1.45}
+.telegram-media-fields{display:grid;gap:9px;margin-top:13px}.telegram-media-fields label{font-size:12px}
+.telegram-media-fields input,.telegram-media-fields select{min-width:0;width:100%}.telegram-media-fields button{width:100%}
+@media(max-width:730px){.telegram-event-grid{grid-template-columns:1fr}.telegram-event-card{padding:12px}}

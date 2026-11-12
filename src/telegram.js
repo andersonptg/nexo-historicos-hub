@@ -6,13 +6,24 @@ const HEADERS={'Content-Type':'application/json; charset=utf-8','Cache-Control':
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:HEADERS});
 const stamp=()=>Math.floor(Date.now()/1000);
 const FIELDS=['enabled','prealert','entry','gale1','gale2','win','red','deletePrealert'];
+const MEDIA_EVENTS=['activation','entry','gale1','gale2','win','winWhite','red'];
+const SOURCE_ACTIVATION='__telegram_activation__';
+const MEDIA_NONE={type:'none',fileId:''};
+const validFileId=id=>typeof id==='string'&&/^[A-Za-z0-9_-]{10,512}$/.test(id);
+function normalizeMedia(value){
+ if(!value||typeof value!=='object'||!['none','animation','sticker'].includes(value.type))throw Error('Tipo de mídia inválido');
+ if(value.type==='none')return {...MEDIA_NONE};
+ if(!validFileId(value.fileId))throw Error('FILE_ID inválido. Encaminhe uma mídia ao bot e escolha Puxar do Telegram.');
+ return {type:value.type,fileId:value.fileId};
+}
+const configuredMedia=value=>Object.fromEntries(MEDIA_EVENTS.map(k=>[k,(()=>{try{return normalizeMedia(value?.[k]||MEDIA_NONE)}catch{return {...MEDIA_NONE}}})()]));
 export const TELEGRAM_DEFAULT=Object.freeze({enabled:false,prealert:true,entry:true,gale1:true,gale2:true,win:true,red:true,deletePrealert:true});
 const allowedChat=id=>/^-?\d{5,20}$/.test(id)||/^@[a-zA-Z0-9_]{5,32}$/.test(id);
 export function telegramConfigured(env){return typeof env.TELEGRAM_BOT_TOKEN==='string' && /^\d{5,15}:[a-zA-Z0-9_-]{25,}$/.test(env.TELEGRAM_BOT_TOKEN) && typeof env.TELEGRAM_CHAT_ID==='string'&&allowedChat(env.TELEGRAM_CHAT_ID.trim());}
 export async function getTelegramSettings(db){
  const row=await db.prepare('SELECT settings_json FROM telegram_settings WHERE source_id=?').bind(SOURCE).first();
  let value={};try{value=JSON.parse(row?.settings_json||'{}')}catch{}
- return Object.fromEntries(FIELDS.map(k=>[k,typeof value[k]==='boolean'?value[k]:TELEGRAM_DEFAULT[k]]));
+ return {...Object.fromEntries(FIELDS.map(k=>[k,typeof value[k]==='boolean'?value[k]:TELEGRAM_DEFAULT[k]])),media:configuredMedia(value.media)};
 }
 // Somente entradas novas, capturadas durante a coleta e com horário recente, entram na fila.
 // O ID do evento e unico: um mesmo resultado nao cria dois envios.
@@ -22,9 +33,10 @@ export function telegramQueueStatement(db,{eventId,sourceId,strategyId,event,bod
  // A fonte publica possui apenas PRECISAO DE MINUTO. Nunca publicar um alerta antigo como se fosse ao vivo.
  if(!Number.isFinite(event.minute_epoch)||Math.abs(now-event.minute_epoch)>180)return null;
  const action=(event.type==='clear_prealert'||event.type==='cancel_prealert')?'delete':'send';
+ const outType=event.type==='win'&&(event.color==='white'||event.number===0)?'winWhite':event.type;
  if(action==='send'&&(!body||!body.trim()))return null;
  return db.prepare(`INSERT OR IGNORE INTO telegram_outbox(event_id,source_id,strategy_id,event_type,action,message,status,created_at,next_attempt)
-   VALUES(?,?,?,?,?,?, 'pending',?,?)`).bind(eventId,sourceId,strategyId,event.type,action,body||'',now,now);
+   VALUES(?,?,?,?,?,?, 'pending',?,?)`).bind(eventId,sourceId,strategyId,outType,action,body||'',now,now);
 }
 async function botCall(env,method,payload){
  const response=await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`,{
@@ -34,6 +46,12 @@ async function botCall(env,method,payload){
  const data=await response.json();
  if(!data.ok)throw new Error('Telegram recusou a operação');
  return data.result;
+}
+// Ativação única no momento em que monitoramento E envio ficam ligados.
+export function telegramActivationStatement(db,template,now){
+ const text=String(template||'🚨 ATENÇÃO — ROBÔ ATIVADO!\n🤖 BLAZE PRO NEXO PTG 🤖').slice(0,1500);
+ return db.prepare(`INSERT OR IGNORE INTO telegram_outbox(event_id,source_id,strategy_id,event_type,action,message,status,created_at,next_attempt)
+  VALUES(?,?,?,'activation','send',?,'pending',?,?)`).bind('activation:'+crypto.randomUUID(),SOURCE,SOURCE_ACTIVATION,text,now,now);
 }
 const capped=(message)=>String(message||'').slice(0,3900);
 export async function sendTelegramTest(env){
@@ -59,8 +77,30 @@ async function dispatchOne(env,row,now){
    }
    await db.prepare("UPDATE telegram_outbox SET status='sent',last_error=NULL,sent_at=? WHERE queue_id=?").bind(stamp(),row.queue_id).run();
   }else{
-   const result=await botCall(env,'sendMessage',{chat_id:env.TELEGRAM_CHAT_ID,text:capped(row.message),link_preview_options:{is_disabled:true}});
-   const messageId=Number(result?.message_id||0);
+   const settings=await getTelegramSettings(db);
+   const media=settings.media[row.event_type]||MEDIA_NONE;
+   const text=capped(row.message);
+   let messageId=Number(row.telegram_message_id||0);
+   if(media.type==='animation'){
+    // Uma animação GIF e a legenda formam UMA mensagem Telegram.
+    // Mantém a última linha (pedra sorteada) ao resumir legendas extensas.
+    const caption=text.length>1024?(text.slice(0,880)+'\n…\n'+text.slice(-130)):text;
+    const result=await botCall(env,'sendAnimation',{chat_id:env.TELEGRAM_CHAT_ID,animation:media.fileId,caption});
+    messageId=Number(result?.message_id||0);
+   }else if(media.type==='sticker'){
+    // sendSticker NÃO aceita legenda. Duas mensagens, uma ocorrência do evento.
+    // Persistir a primeira mensagem permite retomar a segunda após falha.
+    if(!messageId){
+     const result=await botCall(env,'sendSticker',{chat_id:env.TELEGRAM_CHAT_ID,sticker:media.fileId});
+     messageId=Number(result?.message_id||0);
+     if(!messageId)throw Error('Telegram não confirmou a figurinha');
+     await db.prepare('UPDATE telegram_outbox SET telegram_message_id=? WHERE queue_id=?').bind(messageId,row.queue_id).run();
+    }
+    if(text)await botCall(env,'sendMessage',{chat_id:env.TELEGRAM_CHAT_ID,text,link_preview_options:{is_disabled:true}});
+   }else{
+    const result=await botCall(env,'sendMessage',{chat_id:env.TELEGRAM_CHAT_ID,text,link_preview_options:{is_disabled:true}});
+    messageId=Number(result?.message_id||0);
+   }
    if(!messageId)throw Error('Telegram não retornou identificador da mensagem');
    const writes=[db.prepare("UPDATE telegram_outbox SET status='sent',last_error=NULL,sent_at=?,telegram_message_id=? WHERE queue_id=?").bind(stamp(),messageId,row.queue_id)];
    if(row.event_type==='prealert')writes.push(db.prepare(`INSERT INTO telegram_prealerts(strategy_id,message_id,event_id,updated_at) VALUES(?,?,?,?)
@@ -84,14 +124,14 @@ export async function flushTelegram(env,max=4){
  const settings=await getTelegramSettings(env.DB);
  const status=await env.DB.prepare('SELECT config_json FROM strategy_settings WHERE source_id=?').bind(SOURCE).first();
  let automatic=false;try{automatic=JSON.parse(status?.config_json||'{}').automatic===true}catch{}
- if(!settings.enabled||!automatic)return {skipped:'disabled'};
+ if(!settings.enabled)return {skipped:'disabled'};
  let processed=0;
  for(let i=0;i<max;i++){
   const now=stamp();
   // Pedras antigas nao podem gerar mensagem nova fora de contexto.
   await env.DB.prepare(`UPDATE telegram_outbox SET status='expired',last_error='Evento antigo' WHERE status IN ('pending','retry','sending') AND created_at<?`).bind(now-180).run();
   // Ordem rigorosa: nunca enviar entrada antes do pre-aviso pendente em nova tentativa.
-  const row=await env.DB.prepare(`SELECT * FROM telegram_outbox WHERE status IN ('pending','retry','sending') ORDER BY queue_id LIMIT 1`).bind().first();
+  const row=await env.DB.prepare(`SELECT * FROM telegram_outbox WHERE status IN ('pending','retry','sending') ${automatic?'':"AND event_type='activation'"} ORDER BY CASE WHEN event_type='activation' THEN 0 ELSE 1 END,queue_id LIMIT 1`).bind().first();
   if(!row||Number(row.next_attempt)>now)break;
   if(await dispatchOne(env,row,now))processed++;else break;
   if(i+1<max)await wait(1050); // Evita excesso de mensagens por segundo no mesmo chat.
@@ -108,16 +148,54 @@ export async function handleTelegram(request,env,url){
   const recent=await db.prepare(`SELECT event_type,status,last_error,created_at,sent_at FROM telegram_outbox ORDER BY queue_id DESC LIMIT 12`).all();
   return json({configured:telegramConfigured(env),chatConfigured:!!(env.TELEGRAM_CHAT_ID&&allowedChat(env.TELEGRAM_CHAT_ID.trim())),settings,counts:counts.results,recent:recent.results});
  }
+ if(path==='/api/telegram/media'&&request.method==='GET'){
+  if(!telegramConfigured(env))return json({error:'Configure o bot e chat ID primeiro.'},409);
+  try{
+   // getUpdates sem offset não confirma nem remove as mensagens de entrada.
+   // Mostramos SOMENTE mídias encaminhadas ao chat configurado, nunca outras conversas.
+   const updates=await botCall(env,'getUpdates',{limit:100,timeout:0,allowed_updates:['message','channel_post']});
+   const list=[];const known=new Set();
+   for(const item of [...updates].reverse()){
+    const msg=item.message||item.channel_post;if(!msg||String(msg.chat?.id)!==String(env.TELEGRAM_CHAT_ID))continue;
+    const media=msg.animation||msg.sticker;if(!media||!validFileId(media.file_id)||known.has(media.file_id))continue;
+    const type=msg.animation?'animation':'sticker';
+    known.add(media.file_id);list.push({type,fileId:media.file_id,label:(type==='animation'?'GIF':'Sticker')+' · '+new Date((msg.date||stamp())*1000).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'}),id:msg.message_id});
+    if(list.length>=30)break;
+   }
+   return json({items:list,notice:list.length?'Escolha o GIF ou sticker.':'Encaminhe as mídias para o bot e atualize. O Telegram mantém updates até 24 horas.'});
+  }catch(error){const msg=String(error?.message||'');return json({error:msg.includes('409')?'Webhook ou outra leitura ativa no bot: getUpdates indisponível. Cole o FILE_ID manualmente.':'Não foi possível consultar as mídias recebidas pelo bot.'},502);}
+ }
  if(path==='/api/telegram/settings'&&request.method==='PUT'){
   let body;try{body=await request.json()}catch{return json({error:'JSON inválido'},400)}
   const previous=await getTelegramSettings(db),next={...previous};
   for(const [k,v] of Object.entries(body||{})){
-   if(!FIELDS.includes(k)||typeof v!=='boolean')return json({error:'Configuração inválida: '+k},400);
-   next[k]=v;
+   if(k==='media'){
+    if(!v||typeof v!=='object'||Array.isArray(v))return json({error:'Mídias inválidas'},400);
+    const media={...previous.media};
+    for(const [event,val] of Object.entries(v)){
+     if(!MEDIA_EVENTS.includes(event))return json({error:'Evento desconhecido: '+event},400);
+     try{media[event]=normalizeMedia(val)}catch(e){return json({error:event+': '+e.message},400)}
+    }
+    next.media=media;
+   }else if(FIELDS.includes(k)&&typeof v==='boolean')next[k]=v;
+   else return json({error:'Configuração inválida: '+k},400);
   }
   if(next.enabled&&!telegramConfigured(env))return json({error:'Configure os dois segredos do Telegram no Worker antes de ativar.'},409);
-  await db.prepare(`INSERT INTO telegram_settings(source_id,settings_json,updated_at) VALUES(?,?,?) ON CONFLICT(source_id)
-  DO UPDATE SET settings_json=excluded.settings_json,updated_at=excluded.updated_at`).bind(SOURCE,JSON.stringify(next),stamp()).run();
+  const now=stamp();
+  const writes=[db.prepare(`INSERT INTO telegram_settings(source_id,settings_json,updated_at) VALUES(?,?,?) ON CONFLICT(source_id)
+   DO UPDATE SET settings_json=excluded.settings_json,updated_at=excluded.updated_at`).bind(SOURCE,JSON.stringify(next),now)];
+  const justEnabledTelegram=!previous.enabled&&next.enabled;
+  let activeStrategy=false;
+  if(justEnabledTelegram){
+   const strategy=await db.prepare('SELECT config_json FROM strategy_settings WHERE source_id=?').bind(SOURCE).first();
+   let cfg={};try{cfg=JSON.parse(strategy?.config_json||'{}')}catch{}
+   activeStrategy=cfg.automatic===true;
+   if(activeStrategy)writes.push(telegramActivationStatement(db,cfg.templates?.activation,now));
+  }
+  await db.batch(writes);
+  // O aviso de ativação é entregue só quando o robô fica realmente ativo (ambos controles ligados).
+  // Nunca é repetido pela atualização do painel nem pelas coletas.
+  if(justEnabledTelegram&&activeStrategy)try{await flushTelegram(env,1)}catch(error){console.warn('Falha na entrega do aviso de ativação');}
   return json({ok:true,settings:next});
  }
  if(path==='/api/telegram/test'&&request.method==='POST'){

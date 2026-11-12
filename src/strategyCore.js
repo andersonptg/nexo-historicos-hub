@@ -53,18 +53,19 @@ export function evolve(input,rule,history){
  return {state,events};
 }
 export const PRESET_MESSAGES=Object.freeze({
- prealert:'⚠️ Atenção, sinal identificado\nSequência parcial: {PATTERN}\nAguardando confirmação.',
+ prealert:'🔎 Pré-aviso de sequência\nSequência parcial: {PATTERN}\nAguardando confirmação.',
  entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',
  gale1:'- - - - GALE 1 - - - -\nTentamos novamente na segunda rodada.',
  gale2:'- - - - GALE 2 - - - -\nÚltima tentativa configurada.',
  win:'✅ WIN — alvo confirmado na rodada registrada.',
+ activation:'🚨 ATENÇÃO — ROBÔ ATIVADO!\n🤖 BLAZE PRO NEXO PTG 🤖',
  winWhite:'✅ WIN NO BRANCO ⚪ — acerto na pedra branca.',
  red:'❌ RED — alvo não confirmado até o limite configurado.',
  brand:'🤖 BLAZE PRO NEXO PTG 🤖'
 });
 const colorText={white:'BRANCO ⚪',red:'VERMELHO 🔴',black:'PRETO ⚫'};
 export function tokenText(t){return t.kind==='color'?colorText[t.value]:String(t.value);}
-// V10: todas as mensagens de eventos observados exibem a pedra realmente sorteada.
+// V11: somente o resultado WIN mostra a pedra sorteada, uma vez, abaixo do WIN.
 const roundEmoji={red:'🔴',black:'⚫',white:'⚪'};
 export function eventMessage(event,rule,templates=PRESET_MESSAGES){
  if(event.type==='clear_prealert'||event.type==='cancel_prealert')return '';
@@ -77,7 +78,7 @@ export function eventMessage(event,rule,templates=PRESET_MESSAGES){
  const main=template.replaceAll('{NAME}',rule.name)
   .replaceAll('{PATTERN}',rule.pattern.map(tokenText).join(' · '))
   .replaceAll('{TARGET}',targets.join(' OU '))
-  .replaceAll('{GALE}',String(rule.galeMax)).replaceAll('{STONE}',stone);
+  .replaceAll('{GALE}',String(rule.galeMax)).replaceAll('{STONE}','');
  const brand=templates.brand?`\n\n${String(templates.brand).slice(0,150)}`:'';
- return main+brand+(stone&&!template.includes('{STONE}')?`\nPedra sorteada (${stone})`:'');
+ return main+brand+(event.type==='win'&&stone?`\n\nPedra sorteada (${stone})`:'');
 }

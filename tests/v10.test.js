@@ -43,11 +43,11 @@ test('V10: WIN na preta mostra pedra sorteada exata',()=>{
  assert.equal(data.events.at(-1).type,'win');
  assert.match(eventMessage(data.events.at(-1),simple,PRESET_MESSAGES),/Pedra sorteada \(⚫12\)/);
 });
-test('V10: gale e red mostram pedra, sem converter alvo numérico antigo',()=>{
+test('V11: gale e RED não mostram pedra, sem converter alvo numérico antigo',()=>{
  const rule=validateRule({...simple,galeMax:1});
  const events=run(rule,[1,8,6,7]).events;
  assert.deepEqual(events.map(e=>e.type).slice(0,5),['prealert','clear_prealert','entry','gale1','red']);
- assert.match(eventMessage(events.find(e=>e.type==='red'),rule,PRESET_MESSAGES),/Pedra sorteada \(🔴7\)/);
+ assert.doesNotMatch(eventMessage(events.find(e=>e.type==='red'),rule,PRESET_MESSAGES),/Pedra sorteada/);
  const legacy=validateRule({...simple,targets:[token(12,'number')]});
  assert.equal(run(legacy,[1,8,0]).events.at(-1).type,'gale1');
 });

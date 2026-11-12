@@ -1,9 +1,10 @@
 const $=id=>document.getElementById(id);
 const PREFS_KEY='nexo-historicos-v7-prefs';
-const types=['prealert','entry','gale1','gale2','win','winWhite','red','brand'];
-const labels={prealert:'Pré-aviso',entry:'Entrada',gale1:'Gale 1',gale2:'Gale 2',win:'WIN ✅',winWhite:'WIN NO BRANCO ⚪',red:'RED ❌',brand:'Assinatura'};
+const types=['activation','prealert','entry','gale1','gale2','win','winWhite','red','brand'];
+const mediaTypes=['activation','entry','gale1','gale2','win','winWhite','red'];
+const labels={activation:'🚨 ATENÇÃO — ao ativar o robô (uma vez)',prealert:'Pré-aviso de padrão (texto)',entry:'Entrada',gale1:'Gale 1',gale2:'Gale 2',win:'WIN ✅',winWhite:'WIN NO BRANCO ⚪',red:'RED ❌',brand:'Assinatura'};
 const colors={red:'Vermelho',black:'Preto',white:'Branco'};
-const defaultTemplates={prealert:'⚠️ Atenção, sinal identificado\nSequência parcial: {PATTERN}\nAguardando confirmação.',entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',gale1:'- - - - GALE 1 - - - -',gale2:'- - - - GALE 2 - - - -',win:'✅ WIN — alvo confirmado na rodada registrada.',winWhite:'✅ WIN NO BRANCO ⚪ — acerto na pedra branca.',red:'❌ RED — alvo não confirmado até o limite configurado.',brand:'🤖 BLAZE PRO NEXO PTG 🤖'};
+const defaultTemplates={activation:'🚨 ATENÇÃO — ROBÔ ATIVADO!\n🤖 BLAZE PRO NEXO PTG 🤖',prealert:'🔎 Pré-aviso de sequência\nSequência parcial: {PATTERN}\nAguardando confirmação.',entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',gale1:'- - - - GALE 1 - - - -',gale2:'- - - - GALE 2 - - - -',win:'✅ WIN — alvo confirmado na rodada registrada.',winWhite:'✅ WIN NO BRANCO ⚪ — acerto na pedra branca.',red:'❌ RED — alvo não confirmado até o limite configurado.',brand:'🤖 BLAZE PRO NEXO PTG 🤖'};
 const api=async(url,opts={})=>{const r=await fetch(url,{credentials:'same-origin',cache:'no-store',...opts});const body=await r.json();if(!r.ok)throw Error(body.error||`HTTP ${r.status}`);return body;};
 const send=(path,method,data)=>api(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
 let serverState=null,rules=[],editing=null,pattern=[],winColor='black',useNumbers=false,busy=false,prefs={},knownIds=new Set(),lastStone=null,firstBalls=true,lastEventSeq=0;
@@ -86,11 +87,56 @@ function drawRules(){const host=$('strategies');host.textContent='';$('strategyC
 function drawEvents(){const host=$('events');host.textContent='';const logs=serverState?.events||[];
  if(!logs.length){const p=document.createElement('p');p.className='muted';p.textContent='Nenhum sinal registrado. A detecção começa somente com resultados novos após ativar o automático.';host.append(p);return;}
  for(const e of logs){const card=document.createElement('div');card.className='event-card '+e.event_type;const top=document.createElement('div');top.className='event-top';const title=document.createElement('strong');const names={prealert:'⚠ Pré-aviso',clear_prealert:'🧹 Remover pré-aviso',cancel_prealert:'↩ Pré-aviso cancelado',entry:'🎯 Entrada',gale1:'⤴ Gale 1',gale2:'⤴ Gale 2',win:'✅ WIN',red:'❌ RED'};title.textContent=names[e.event_type]||e.event_type;
- const meta=document.createElement('small');meta.textContent=`Pedra ${e.round_number} · ${brasil(e.minute_epoch)}`;top.append(title,meta);card.append(top);if(e.message){const content=document.createElement('pre');content.textContent=e.message;card.append(content);}host.append(card);}
+ const meta=document.createElement('small');meta.textContent=(e.event_type==='win'?`Pedra ${e.round_number} · `:'')+brasil(e.minute_epoch);top.append(title,meta);card.append(top);if(e.message){const content=document.createElement('pre');content.textContent=e.message;card.append(content);}host.append(card);}
 }
-function drawTemplates(){const host=$('templates');host.textContent='';const models=serverState?.settings?.templates||defaultTemplates;
- for(const type of types){const label=document.createElement('label');label.textContent=labels[type];const text=document.createElement('textarea');text.id='template-'+type;text.value=models[type]||'';text.maxLength=1200;text.rows=type==='entry'||type==='prealert'?4:2;label.append(text);host.append(label);}
+function drawTemplates(){
+ const host=$('templates');host.textContent='';
+ const models=serverState?.settings?.templates||defaultTemplates;
+ const savedMedia=telegramSettingsCache?.media||{};
+ for(const type of types){
+  const card=document.createElement('div');card.className='telegram-event-card';
+  const label=document.createElement('label');label.textContent=labels[type];
+  const text=document.createElement('textarea');text.id='template-'+type;
+  text.value=models[type]??defaultTemplates[type]??'';text.maxLength=type==='brand'?150:1000;text.rows=type==='entry'||type==='prealert'?3:2;
+  label.append(text);card.append(label);
+  if(mediaTypes.includes(type)){
+   const row=document.createElement('div');row.className='telegram-media-fields';
+   const typeLabel=document.createElement('label');typeLabel.textContent='Formato de envio';
+   const select=document.createElement('select');select.id='tg-media-type-'+type;
+   for(const [value,title] of [['none','Só texto'],['animation','GIF / Animação com legenda'],['sticker','Sticker + mensagem de texto']]){
+    const option=document.createElement('option');option.value=value;option.textContent=title;select.append(option);
+   }
+   select.value=savedMedia[type]?.type||'none';typeLabel.append(select);
+   const idLabel=document.createElement('label');idLabel.textContent='FILE_ID do Telegram';
+   const idInput=document.createElement('input');idInput.id='tg-file-id-'+type;idInput.autocomplete='off';idInput.placeholder='Cole ou escolha com Puxar do Telegram';idInput.value=savedMedia[type]?.fileId||'';idLabel.append(idInput);
+   const pull=document.createElement('button');pull.type='button';pull.className='outline';pull.textContent='↧ Puxar do Telegram';
+   pull.onclick=()=>safe(()=>pullTelegramMedia(type),'templateMsg');
+   const found=document.createElement('select');found.id='tg-found-'+type;found.className='hidden';
+   found.onchange=()=>{const choice=telegramMediaCache[Number(found.value)];if(!choice)return;select.value=choice.type;idInput.value=choice.fileId;};
+   row.append(typeLabel,idLabel,pull,found);card.append(row);
+  }
+  if(type==='activation'){
+   const p=document.createElement('p');p.className='muted';p.textContent='Envia uma vez somente quando o botão Envio automático muda de desligado para ligado. Não se repete a cada pedra.';card.append(p);
+  }
+  if(type==='win'){
+   const p=document.createElement('p');p.className='muted';p.textContent='A linha Pedra sorteada (⚫12) é acrescentada automaticamente apenas abaixo do WIN. Não escreva a pedra nos outros modelos.';card.append(p);
+  }
+  host.append(card);
+ }
 }
+let telegramSettingsCache=null,telegramMediaCache=[];
+async function pullTelegramMedia(type){
+ const response=await api('/api/telegram/media');telegramMediaCache=response.items||[];
+ const chosen=$('tg-found-'+type);chosen.textContent='';
+ const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Selecione um GIF ou Sticker recebido';chosen.append(placeholder);
+ telegramMediaCache.forEach((m,i)=>{const opt=document.createElement('option');opt.value=String(i);opt.textContent=m.label;chosen.append(opt);});
+ chosen.classList.toggle('hidden',!telegramMediaCache.length);
+ flash(telegramMediaCache.length?'Escolha a mídia na lista do evento.':response.notice,'templateMsg',!!telegramMediaCache.length);
+}
+function collectTelegramMedia(){
+ return Object.fromEntries(mediaTypes.map(k=>[k,{type:$('tg-media-type-'+k).value,fileId:$('tg-file-id-'+k).value.trim()}]));
+}
+
 function reflectSettings(){const config=serverState?.settings;if(!config)return;
  for(const k of ['automatic','prealert','entry','fireworks'])$(k).checked=!!config[k];
  for(const k of ['order','flow','clock'])$(k).value=prefs[k]||({order:'desc',flow:'ltr',clock:'hm'})[k];
@@ -117,7 +163,7 @@ function celebrate(){if(matchMedia('(prefers-reduced-motion: reduce)').matches)r
 const tgFields=['enabled','prealert','entry','gale1','gale2','win','red','deletePrealert'];
 let telegramReady=false;
 async function loadTelegram(){
- const status=await api('/api/telegram/status');telegramReady=!!status.configured;
+ const status=await api('/api/telegram/status');telegramReady=!!status.configured;telegramSettingsCache=status.settings;drawTemplates();
  for(const field of tgFields)$('tg-'+field).checked=!!status.settings[field];
  $('telegramConnection').textContent=status.configured
   ? '⚙️ Segredos presentes (formato válido). Faça o teste de envio. '+(status.settings.enabled?'Envio habilitado.':'Envio de sinais desativado.')
@@ -160,7 +206,7 @@ function initHandlers(){
    await loadState(false);flash('Exemplos cadastrados, inicialmente pausados.','editorMsg',true);
  });
  $('reload').onclick=()=>safe(()=>loadState(false),'editorMsg');
- $('saveTemplates').onclick=()=>safe(async()=>{const t=Object.fromEntries(types.map(k=>[k,$('template-'+k).value]));await send('/api/strategies/settings','PUT',{templates:t});await loadState(false);flash('Mensagens salvas para o painel e Telegram.','templateMsg',true);},'templateMsg');
+ $('saveTemplates').onclick=()=>safe(async()=>{const t=Object.fromEntries(types.map(k=>[k,$('template-'+k).value]));await send('/api/strategies/settings','PUT',{templates:t});await send('/api/telegram/settings','PUT',{media:collectTelegramMedia()});await loadState(false);await loadTelegram();flash('Textos e mídias salvos no D1.','templateMsg',true);},'templateMsg');
  $('simulate').onclick=()=>safe(async()=>{const values=$('demoRounds').value.split(',').map(x=>x.trim()).filter(Boolean).map(Number);if(!values.length)throw Error('Insira números separados por vírgulas');const result=await send('/api/strategies/demo','POST',{rule:validClient(editorRule()),rounds:values,templates:serverState?.settings?.templates});$('demoOutput').textContent=result.events.length?result.events.map(e=>`${e.type.toUpperCase()}: ${e.message||'Limpeza do aviso'}`).join('\n\n'):'Nenhum padrão identificado nesta sequência.';},'editorMsg');
  renderBuilder();
 }

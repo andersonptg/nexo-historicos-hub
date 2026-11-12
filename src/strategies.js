@@ -1,6 +1,6 @@
 import {authorized,sameOrigin} from './admin.js';
 import {validateRule,evolve,eventMessage,PRESET_MESSAGES,COLOR} from './strategyCore.js';
-import {getTelegramSettings,telegramQueueStatement,flushTelegram} from './telegram.js';
+import {getTelegramSettings,telegramQueueStatement,flushTelegram,telegramActivationStatement} from './telegram.js';
 
 const JSON_HEADERS={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:JSON_HEADERS});
@@ -12,7 +12,10 @@ const allowedTemplateKeys=new Set(Object.keys(PRESET_MESSAGES));
 export async function getSettings(db){
  const row=await db.prepare('SELECT config_json FROM strategy_settings WHERE source_id=?').bind(SMASH).first();
  const stored=parseJSON(row?.config_json)||{};
- return {...DEFAULT_SETTINGS,...stored,templates:{...PRESET_MESSAGES,...(stored.templates||{})}};
+ const templates={...PRESET_MESSAGES,...(stored.templates||{})};
+ // Migração discreta: "ATENÇÃO" passa a ser exclusiva da ativação do robô.
+ if(templates.prealert==='⚠️ Atenção, sinal identificado\nSequência parcial: {PATTERN}\nAguardando confirmação.')templates.prealert=PRESET_MESSAGES.prealert;
+ return {...DEFAULT_SETTINGS,...stored,templates};
 }
 function parseRule(row){return {...validateRule({...parseJSON(row.definition),enabled:!!row.enabled}),id:row.id,createdAt:row.created_at,updatedAt:row.updated_at};}
 function validSource(url){return (url.searchParams.get('platform')||'smash')==='smash'&&(url.searchParams.get('game')||'double')==='double';}
@@ -46,7 +49,13 @@ export async function handleStrategies(request,env,url){
   const writes=[db.prepare(`INSERT INTO strategy_settings(source_id,config_json,updated_at) VALUES(?,?,?)
    ON CONFLICT(source_id) DO UPDATE SET config_json=excluded.config_json,updated_at=excluded.updated_at`).bind(SMASH,JSON.stringify(next),stamp())];
   if(old.automatic&&!next.automatic)writes.push(db.prepare("DELETE FROM strategy_runtime WHERE strategy_id IN (SELECT id FROM strategies WHERE platform='smash' AND game='double')"));
+  // Com o envio Telegram já ligado, iniciar o monitoramento gera ATENÇÃO uma única vez.
+  let activated=false;
+  if(!old.automatic&&next.automatic){const tg=await getTelegramSettings(db);
+   if(tg.enabled){writes.push(telegramActivationStatement(db,next.templates.activation,stamp()));activated=true;}
+  }
   await db.batch(writes);
+  if(activated)try{await flushTelegram(env,1)}catch(error){console.warn('Ativação do Telegram não enviada nesta tentativa');}
   return json({ok:true,settings:next});
  }
  if(path==='/api/strategies'&&request.method==='POST'){
