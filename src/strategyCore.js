@@ -47,16 +47,16 @@ export function evolve(input,rule,history){
   add('entry');state.active={entryRoundId:current.id,step:0};
  }else{
   const partial=rule.pattern.length>1&&suffixMatches(state.recent,rule.pattern.slice(0,-1));
-  if(state.prealertRoundId){add('cancel_prealert');state.prealertRoundId=null;}
-  if(partial){add('prealert');state.prealertRoundId=current.id;}
+  if(partial){if(!state.prealertRoundId){add('prealert');state.prealertRoundId=current.id;}}
+  else if(state.prealertRoundId){add('cancel_prealert');state.prealertRoundId=null;}
  }
  return {state,events};
 }
 export const PRESET_MESSAGES=Object.freeze({
  prealert:'🔎 Pré-aviso de sequência\nSequência parcial: {PATTERN}\nAguardando confirmação.',
  entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',
- gale1:'- - - - GALE 1 - - - -\nTentamos novamente na segunda rodada.',
- gale2:'- - - - GALE 2 - - - -\nÚltima tentativa configurada.',
+ gale1:'- - - - GALE 1 - - - -',
+ gale2:'- - - - GALE 2 - - - -',
  win:'✅ WIN — alvo confirmado na rodada registrada.',
  activation:'🚨 ATENÇÃO — ROBÔ ATIVADO!\n🤖 BLAZE PRO NEXO PTG 🤖',
  winWhite:'✅ WIN NO BRANCO ⚪ — acerto na pedra branca.',
@@ -79,6 +79,6 @@ export function eventMessage(event,rule,templates=PRESET_MESSAGES){
   .replaceAll('{PATTERN}',rule.pattern.map(tokenText).join(' · '))
   .replaceAll('{TARGET}',targets.join(' OU '))
   .replaceAll('{GALE}',String(rule.galeMax)).replaceAll('{STONE}','');
- const brand=templates.brand?`\n\n${String(templates.brand).slice(0,150)}`:'';
+ const brand=event.type==='entry'&&templates.brand?`\n\n${String(templates.brand).slice(0,150)}`:'';
  return main+brand+(event.type==='win'&&stone?`\n\nPedra sorteada (${stone})`:'');
 }

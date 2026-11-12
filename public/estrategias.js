@@ -1,8 +1,8 @@
 const $=id=>document.getElementById(id);
 const PREFS_KEY='nexo-historicos-v7-prefs';
 const types=['activation','prealert','entry','gale1','gale2','win','winWhite','red','brand'];
-const mediaTypes=['activation','entry','gale1','gale2','win','winWhite','red'];
-const labels={activation:'🚨 ATENÇÃO — ao ativar o robô (uma vez)',prealert:'Pré-aviso de padrão (texto)',entry:'Entrada',gale1:'Gale 1',gale2:'Gale 2',win:'WIN ✅',winWhite:'WIN NO BRANCO ⚪',red:'RED ❌',brand:'Assinatura'};
+const mediaTypes=['activation','prealert','entry','gale1','gale2','win','winWhite','red'];
+const labels={activation:'🚀 Ativação — ao ligar o robô (uma vez)',prealert:'🔍 ATENÇÃO — antes da entrada (apagar após confirmação)',entry:'Entrada',gale1:'Gale 1',gale2:'Gale 2',win:'WIN ✅',winWhite:'WIN NO BRANCO ⚪',red:'RED ❌',brand:'Assinatura'};
 const colors={red:'Vermelho',black:'Preto',white:'Branco'};
 const defaultTemplates={activation:'🚨 ATENÇÃO — ROBÔ ATIVADO!\n🤖 BLAZE PRO NEXO PTG 🤖',prealert:'🔎 Pré-aviso de sequência\nSequência parcial: {PATTERN}\nAguardando confirmação.',entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',gale1:'- - - - GALE 1 - - - -',gale2:'- - - - GALE 2 - - - -',win:'✅ WIN — alvo confirmado na rodada registrada.',winWhite:'✅ WIN NO BRANCO ⚪ — acerto na pedra branca.',red:'❌ RED — alvo não confirmado até o limite configurado.',brand:'🤖 BLAZE PRO NEXO PTG 🤖'};
 const api=async(url,opts={})=>{const r=await fetch(url,{credentials:'same-origin',cache:'no-store',...opts});const body=await r.json();if(!r.ok)throw Error(body.error||`HTTP ${r.status}`);return body;};
@@ -103,7 +103,7 @@ function drawTemplates(){
    const row=document.createElement('div');row.className='telegram-media-fields';
    const typeLabel=document.createElement('label');typeLabel.textContent='Formato de envio';
    const select=document.createElement('select');select.id='tg-media-type-'+type;
-   for(const [value,title] of [['none','Só texto'],['animation','GIF / Animação com legenda'],['sticker','Sticker + mensagem de texto']]){
+   for(const [value,title] of [['none','Só texto'],['animation','GIF / Animação com legenda'],['sticker','Sticker (texto opcional no painel)']]){
     const option=document.createElement('option');option.value=value;option.textContent=title;select.append(option);
    }
    select.value=savedMedia[type]?.type||'none';typeLabel.append(select);
@@ -116,10 +116,11 @@ function drawTemplates(){
    row.append(typeLabel,idLabel,pull,found);card.append(row);
   }
   if(type==='activation'){
-   const p=document.createElement('p');p.className='muted';p.textContent='Envia uma vez somente quando o botão Envio automático muda de desligado para ligado. Não se repete a cada pedra.';card.append(p);
+   const p=document.createElement('p');p.className='muted';p.textContent='Envia uma vez ao ativar o robô com o Telegram habilitado. Atenção: o ID inicial desta figurinha é igual ao do WIN. Você pode substituí-lo aqui.';card.append(p);
   }
+  if(type==='prealert'){const p=document.createElement('p');p.className='muted';p.textContent='Ao confirmar o envio da entrada, a mensagem ATENÇÃO é apagada (opção ativa). Sinais e resultados permanecem.';card.append(p);}
   if(type==='win'){
-   const p=document.createElement('p');p.className='muted';p.textContent='A linha Pedra sorteada (⚫12) é acrescentada automaticamente apenas abaixo do WIN. Não escreva a pedra nos outros modelos.';card.append(p);
+   const p=document.createElement('p');p.className='muted';p.textContent='Após o sticker WIN ou BRANCO, o robô envia somente a pedra sorteada em uma mensagem separada abaixo. Nunca nos outros eventos.';card.append(p);
   }
   host.append(card);
  }
@@ -160,7 +161,7 @@ async function readBalls(){if(document.hidden||!serverState)return;
  }catch(e){$('sourceLabel').textContent='Falha ao consultar histórico: '+e.message;}
 }
 function celebrate(){if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;const canvas=$('fireworksCanvas');const ctx=canvas.getContext('2d');if(!ctx)return;canvas.hidden=false;const ratio=Math.min(window.devicePixelRatio||1,2);canvas.width=innerWidth*ratio;canvas.height=innerHeight*ratio;const stars=Array.from({length:120},(_,i)=>{const angle=Math.PI*2*(i%40)/40,speed=(2+Math.random()*4)*ratio;return {x:canvas.width*(0.3+(Math.floor(i/40)*0.2)),y:canvas.height*0.36,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed,life:1};});let frame=0;const draw=()=>{ctx.clearRect(0,0,canvas.width,canvas.height);for(const s of stars){s.x+=s.vx;s.y+=s.vy;s.vy+=.08*ratio;s.life-=.023;ctx.globalAlpha=Math.max(0,s.life);ctx.fillStyle=['#ff3a84','#f7d753','#66e8ff'][Math.floor(frame/6)%3];ctx.fillRect(s.x,s.y,3*ratio,3*ratio);}ctx.globalAlpha=1;if(++frame<45)requestAnimationFrame(draw);else canvas.hidden=true;};requestAnimationFrame(draw);}
-const tgFields=['enabled','prealert','entry','gale1','gale2','win','red','deletePrealert'];
+const tgFields=['enabled','prealert','entry','gale1','gale2','win','red','deletePrealert','deleteGale','textWithSticker'];
 let telegramReady=false;
 async function loadTelegram(){
  const status=await api('/api/telegram/status');telegramReady=!!status.configured;telegramSettingsCache=status.settings;drawTemplates();

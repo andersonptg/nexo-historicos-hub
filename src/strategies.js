@@ -15,6 +15,9 @@ export async function getSettings(db){
  const templates={...PRESET_MESSAGES,...(stored.templates||{})};
  // Migração discreta: "ATENÇÃO" passa a ser exclusiva da ativação do robô.
  if(templates.prealert==='⚠️ Atenção, sinal identificado\nSequência parcial: {PATTERN}\nAguardando confirmação.')templates.prealert=PRESET_MESSAGES.prealert;
+ // Ajusta apenas os dois textos padrão antigos. Mensagens personalizadas são preservadas.
+ if(templates.gale1==='- - - - GALE 1 - - - -\nTentamos novamente na segunda rodada.')templates.gale1=PRESET_MESSAGES.gale1;
+ if(templates.gale2==='- - - - GALE 2 - - - -\nÚltima tentativa configurada.')templates.gale2=PRESET_MESSAGES.gale2;
  return {...DEFAULT_SETTINGS,...stored,templates};
 }
 function parseRule(row){return {...validateRule({...parseJSON(row.definition),enabled:!!row.enabled}),id:row.id,createdAt:row.created_at,updatedAt:row.updated_at};}
@@ -132,6 +135,6 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
  await db.batch(writes);
  // Entrega apos persistencia para impedir envio antes de salvar o evento.
  // Falhas do Telegram nao devem quebrar a coleta da fonte publica.
- try{await flushTelegram(env,4);}catch(error){console.warn('Falha no despachante Telegram',String(error?.message||error).slice(0,80));}
+ try{await flushTelegram(env,6);}catch(error){console.warn('Falha no despachante Telegram',String(error?.message||error).slice(0,80));}
  return {new:index,events:messages};
 }

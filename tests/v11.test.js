@@ -77,12 +77,13 @@ test('V11: GIF WIN sai em uma mensagem com texto; fila não duplica WIN',async()
  try{
   assert.equal((await flushTelegram(envFor(db),1)).processed,1);
   assert.equal((await flushTelegram(envFor(db),1)).processed,0);
-  assert.deepEqual(calls.map(x=>x.name),['sendAnimation']);
-  assert.equal(calls[0].body.animation,id);assert.match(calls[0].body.caption,/Pedra sorteada/);
+  assert.deepEqual(calls.map(x=>x.name),['sendAnimation','sendMessage']);
+  assert.equal(calls[0].body.animation,id);assert.doesNotMatch(calls[0].body.caption,/Pedra sorteada/);
+  assert.equal(calls[1].body.text,'Pedra sorteada (⚫12)');
  }finally{globalThis.fetch=old;db.sqlite.close();}
 });
 
-test('V11: sticker + texto numa só ocorrência do resultado, sem repetição do sticker',async()=>{
+test('V12: sticker + somente pedra sorteada separada, sem repetição do sticker',async()=>{
  const db=mockD1();setTelegram(db,{win:{type:'sticker',fileId:id}});queue(db,'win',12,'sticker_final');
  const calls=[],old=globalThis.fetch;
  globalThis.fetch=async(url,opts)=>{const name=new URL(url).pathname.split('/').at(-1);calls.push(name);return new Response(JSON.stringify({ok:true,result:{message_id:603+calls.length}}));};

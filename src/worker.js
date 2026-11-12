@@ -200,6 +200,6 @@ export default {
   const turn=others.length?others[Math.floor(Date.now()/60000)%others.length]:null;
   for(const s of [primary,turn])if(s)ctx.waitUntil(guardedCollect(env,s));
   // Reprocessa a fila em caso de indisponibilidade temporaria do Telegram.
-  ctx.waitUntil(flushTelegram(env,4));
+  ctx.waitUntil(flushTelegram(env,6));
  }
 };

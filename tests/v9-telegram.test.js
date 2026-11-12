@@ -52,20 +52,20 @@ test('V9: teste manual chama sendMessage apenas depois de clique explícito',asy
   assert.equal(JSON.parse(calls[0].options.body).chat_id,credentials.TELEGRAM_CHAT_ID);
  }finally{globalThis.fetch=oldFetch;}
 });
-test('V9: envio de pré-aviso registra ID e limpeza apaga mensagem anterior',async()=>{
+test('V12: cancelamento do pré-aviso registra ID e apaga somente o aviso',async()=>{
  const db=mockD1();const now=epoch();
  db.sqlite.prepare('INSERT INTO strategy_settings(source_id,config_json,updated_at) VALUES(?,?,?)').run(sourceId,JSON.stringify({automatic:true}),now);
  db.sqlite.prepare('INSERT INTO telegram_settings(source_id,settings_json,updated_at) VALUES(?,?,?)').run(sourceId,JSON.stringify({enabled:true}),now);
- insertQueue(db,{id:'pre-a',type:'prealert',now});insertQueue(db,{id:'clear-b',type:'clear_prealert',now});
+ insertQueue(db,{id:'pre-a',type:'prealert',now});insertQueue(db,{id:'cancel-b',type:'cancel_prealert',now});
  const previous=globalThis.fetch,calls=[];
  globalThis.fetch=async(url,opts)=>{
   const method=String(url).split('/').at(-1);calls.push({method,payload:JSON.parse(opts.body)});
-  return new Response(JSON.stringify({ok:true,result:method==='sendMessage'?{message_id:437}:true}),{status:200});
+  return new Response(JSON.stringify({ok:true,result:method==='sendSticker'?{message_id:437}:true}),{status:200});
  };
  try{
   const result=await flushTelegram({...credentials,DB:db},2);
   assert.equal(result.processed,2);
-  assert.deepEqual(calls.map(x=>x.method),['sendMessage','deleteMessage']);
+  assert.deepEqual(calls.map(x=>x.method),['sendSticker','deleteMessage']);
   assert.equal(calls[1].payload.message_id,437);
   assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM telegram_outbox WHERE status='sent'").get().n,2);
   assert.equal(db.sqlite.prepare('SELECT COUNT(*) AS n FROM telegram_prealerts').get().n,0);
