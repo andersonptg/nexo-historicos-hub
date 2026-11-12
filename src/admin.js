@@ -43,7 +43,12 @@ export async function adminHandler(request,env,url){
     .bind(key,tries,tries>=5?t+900:0,t).run();
    return json({error:'Senha incorreta'},401);
   }
-  await env.DB.prepare('DELETE FROM admin_login_attempts WHERE key=?').bind(key).run();
+  try {
+   await env.DB.prepare('DELETE FROM admin_login_attempts WHERE key=?').bind(key).run();
+  } catch (error) {
+   // A senha já foi validada. Falha na limpeza não deve impedir o login.
+   console.warn('NEXO: limpeza de login pendente');
+  }
   const exp=String(t+28800),sig=await hmac(env.ADMIN_TOKEN,'session:'+exp);
   return json({authenticated:true},200,{'Set-Cookie':`nexo_admin=${exp}.${sig}; Max-Age=28800; ${cookieAttrs}`});
  }
