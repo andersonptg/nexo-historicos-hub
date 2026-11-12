@@ -102,8 +102,25 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
  const newest=roundIds[0];if(!newest)return {skipped:true};
  if(!cursor){await db.prepare('INSERT OR IGNORE INTO strategy_cursors(source_id,last_round_id,last_updated) VALUES(?,?,?)').bind(source.id,newest,now).run();return {initialized:true};}
  if(cursor.last_round_id===newest)return {new:0};
- const index=roundIds.indexOf(cursor.last_round_id);
- if(index<0||index>25){await db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id).run();return {reset:true,warning:'historico interrompido; estados preservados'};}
+ let index=roundIds.indexOf(cursor.last_round_id);
+ if(index<0||index>25){
+  // V17: quando o cursor some, nao descartar a operacao ativa.
+  // Reconstroi somente a partir do ultimo evento da operacao persistido no D1.
+  const runtime=(await db.prepare("SELECT r.strategy_id,r.state_json FROM strategy_runtime r JOIN strategies s ON s.id=r.strategy_id WHERE s.platform='smash' AND s.game='double' AND s.enabled=1").all()).results;
+  const active=runtime.find(row=>{try{return !!JSON.parse(row.state_json)?.active;}catch{return false;}});
+  if(active){
+   const progress=(await db.prepare("SELECT round_id FROM strategy_events WHERE strategy_id=? AND event_type IN ('entry','gale1','gale2') ORDER BY rowid DESC LIMIT 12").bind(active.strategy_id).all()).results;
+   const anchor=progress.map(row=>roundIds.indexOf(row.round_id)).find(position=>position>=0);
+   if(anchor===undefined){
+    console.warn('NEXO V17: operacao ativa sem rodada ancora no historico; cursor preservado');
+    return {stalled:true,warning:'Operacao ativa: impossivel confirmar rodadas sem identificador; cursor preservado'};
+   }
+   index=anchor;
+  }else{
+   await db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id).run();
+   return {reset:true,warning:'historico interrompido sem operacao ativa'};
+  }
+ }
  const settings=await getSettings(db);
  if(!settings.automatic){await db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id).run();return {paused:true,new:index};}
  const rules=(await loadRules(db)).filter(x=>x.enabled);
