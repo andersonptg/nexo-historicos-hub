@@ -103,7 +103,7 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
  if(!cursor){await db.prepare('INSERT OR IGNORE INTO strategy_cursors(source_id,last_round_id,last_updated) VALUES(?,?,?)').bind(source.id,newest,now).run();return {initialized:true};}
  if(cursor.last_round_id===newest)return {new:0};
  const index=roundIds.indexOf(cursor.last_round_id);
- if(index<0||index>25){await db.batch([db.prepare("DELETE FROM strategy_runtime WHERE strategy_id IN (SELECT id FROM strategies WHERE platform='smash' AND game='double')"),db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id)]);return {reset:true};}
+ if(index<0||index>25){await db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id).run();return {reset:true,warning:'historico interrompido; estados preservados'};}
  const settings=await getSettings(db);
  if(!settings.automatic){await db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id).run();return {paused:true,new:index};}
  const rules=(await loadRules(db)).filter(x=>x.enabled);
@@ -111,22 +111,56 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
  const states=new Map(stateRows.map(x=>[x.strategy_id,parseJSON(x.state_json)||{active:null,prealertRoundId:null}]));
  const telegram=await getTelegramSettings(db);
  const writes=[];let messages=0;
+ // O dono da operacao e inferido do estado persistido em D1.
+ // Nunca cria duas entradas enquanto uma estiver ativa.
+ let owner=rules.find(rule=>states.get(rule.id)?.active)?.id||null;
+ // A ordem e deterministica; uma estrategia escolhida bloqueia as demais.
  for(let i=index-1;i>=0;i--){
   const history=records.slice(i).reverse().map((r,j)=>({id:roundIds[roundIds.length-1-j],number:r.number,color:r.color,minute_epoch:r.minute_epoch}));
+  const current=history.at(-1);
+  if(!current)continue;
+  const hadOwner=!!owner;
+  let finished=false;
+  let chosen=null;
+  const perRound=[];
   for(const rule of rules){
-   const change=evolve(states.get(rule.id)||{active:null,prealertRoundId:null},rule,history);states.set(rule.id,change.state);
-   for(const event of change.events){
-    if(event.type==='prealert'&&!settings.prealert)continue;
-    if(event.type==='entry'&&!settings.entry)continue;
-    const msg=eventMessage(event,rule,settings.templates);
-    const eventId=`${rule.id}:${event.roundId}:${event.type}`;
-    writes.push(db.prepare(`INSERT OR IGNORE INTO strategy_events(id,source_id,strategy_id,event_type,round_id,step,message,round_number,minute_epoch,created_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(eventId,source.id,rule.id,event.type,event.roundId,event.step,msg,event.number,event.minute_epoch,now));
-    const outgoing=telegramQueueStatement(db,{eventId,sourceId:source.id,strategyId:rule.id,event,body:msg,now,config:telegram});
-    if(outgoing)writes.push(outgoing);
-    messages++;
+   const previous=states.get(rule.id)||{active:null,prealertRoundId:null};
+   if(owner&&rule.id!==owner){
+    // Mantem a janela historica atualizada, sem gerar sinais concorrentes.
+    states.set(rule.id,{active:null,prealertRoundId:null,recent:[...(previous.recent||[]),current].slice(-rule.pattern.length)});
+    continue;
    }
+   if(finished||chosen){
+    states.set(rule.id,{active:null,prealertRoundId:null,recent:[...(previous.recent||[]),current].slice(-rule.pattern.length)});
+    continue;
+   }
+   const change=evolve(previous,rule,history);
+   states.set(rule.id,change.state);
+   if(change.events.some(e=>e.type==='win'||e.type==='red')){
+    finished=true;owner=null;
+   }
+   if(change.events.some(e=>e.type==='entry')){
+    chosen=rule.id;owner=rule.id;
+   }
+   for(const event of change.events)perRound.push({rule,event});
   }
+  // Nao emite prealertas de concorrentes nem entradas na rodada de fechamento.
+  for(const {rule,event} of perRound){
+   if(hadOwner&&event.type==='entry')continue;
+   if(event.type==='entry'&&rule.id!==chosen)continue;
+   if(event.type==='prealert'&&(hadOwner||chosen||finished))continue;
+   if(event.type==='prealert'&&!settings.prealert)continue;
+   if(event.type==='entry'&&!settings.entry)continue;
+   const msg=eventMessage(event,rule,settings.templates);
+   const eventId=`${rule.id}:${event.roundId}:${event.type}`;
+   writes.push(db.prepare(`INSERT OR IGNORE INTO strategy_events(id,source_id,strategy_id,event_type,round_id,step,message,round_number,minute_epoch,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(eventId,source.id,rule.id,event.type,event.roundId,event.step,msg,event.number,event.minute_epoch,now));
+   const outgoing=telegramQueueStatement(db,{eventId,sourceId:source.id,strategyId:rule.id,event,body:msg,now,config:telegram});
+   if(outgoing)writes.push(outgoing);
+   messages++;
+  }
+  // Uma operacao que terminou so permite uma nova entrada na proxima rodada.
+  if(finished)owner=null;
  }
  for(const rule of rules)writes.push(db.prepare(`INSERT INTO strategy_runtime(strategy_id,state_json,updated_at) VALUES(?,?,?)
   ON CONFLICT(strategy_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at`).bind(rule.id,JSON.stringify(states.get(rule.id)),now));

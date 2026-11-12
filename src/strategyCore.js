@@ -33,13 +33,15 @@ export function evolve(input,rule,history){
  const state={active:input?.active?{...input.active}:null,prealertRoundId:input?.prealertRoundId||null,recent};
  const events=[];const add=(type,step=0)=>events.push({type,step,roundId:current.id,number:current.number,color:current.color||COLOR[current.number],minute_epoch:current.minute_epoch});
  // A saída sempre é avaliada APÓS a entrada — nunca sobre a mesma pedra.
+ let justFinished=false;
  if(state.active&&state.active.entryRoundId!==current.id){
   // WIN: a cor alvo OU a pedra branca (0) para estratégias de cor.
   const whiteWins=(current.color||COLOR[current.number])==='white'&&rule.targets.some(target=>target.kind==='color');
-  if(rule.targets.some(target=>matches(target,current))||whiteWins){add('win',state.active.step);state.active=null;}
+  if(rule.targets.some(target=>matches(target,current))||whiteWins){add('win',state.active.step);state.active=null;justFinished=true;}
   else if(state.active.step<rule.galeMax){state.active.step++;add(`gale${state.active.step}`,state.active.step);}
-  else{add('red',state.active.step);state.active=null;}
+  else{add('red',state.active.step);state.active=null;justFinished=true;}
  }
+ if(justFinished)return {state:{...state,prealertRoundId:null},events};
  if(state.active){if(state.prealertRoundId){add('cancel_prealert');state.prealertRoundId=null;}return {state,events};}
  const full=suffixMatches(state.recent,rule.pattern);
  if(full){
