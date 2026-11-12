@@ -1,4 +1,9 @@
 -- Criar antes de ativar o Worker. Não armazena contas, cookies ou apostas.
+-- V12: flag por fonte; primeira leitura aplica o limite e novas rodadas mantêm 500.
+CREATE TABLE IF NOT EXISTS history_retention_state (
+ source_id TEXT PRIMARY KEY, last_pruned_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS rounds (
   id TEXT PRIMARY KEY,
   platform TEXT NOT NULL,

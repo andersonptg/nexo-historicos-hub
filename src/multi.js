@@ -1,3 +1,4 @@
+import {shouldPruneHistory,historyPruneStatements} from './retention.js';
 import {reconcileSnapshot} from './parser.js';
 const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
 const json=(obj,status=200)=>new Response(JSON.stringify(obj),{status,headers});
@@ -30,6 +31,10 @@ export async function collectMultiplier(env,source){
   for(const grp of chunks(fresh,12))stmt.push(db.prepare(`INSERT OR IGNORE INTO multiplier_rounds
    (id,platform,game,value,numeric_value,minute_epoch,source,first_seen) VALUES ${grp.map(()=>'(?,?,?,?,?,?,?,?)').join(',')}`)
    .bind(...grp.flatMap(x=>[x.id,source.platform,source.game,x.value,x.numeric_value,x.minute_epoch,source.label,started])));
+  // Limpeza transacional do historico de multiplicadores; não modifica eventos de estratégia.
+  if(await shouldPruneHistory(db,source,fresh.length>0)){
+   stmt.push(...historyPruneStatements(db,source,'multiplier_rounds',started));
+  }
   if(fresh.length||!cache){
    const payload=rows.map((x,i)=>({round_id:ids[i],minute_epoch:x.minute_epoch,number:x.number}));
    stmt.push(db.prepare(`INSERT INTO snapshot_cache(source_id,payload,last_updated) VALUES(?,?,?)

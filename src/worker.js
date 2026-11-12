@@ -1,3 +1,4 @@
+import {shouldPruneHistory,historyPruneStatements} from './retention.js';
 import {reconcileSnapshot} from './parser.js';
 import {ENABLED_SOURCES,PLATFORMS,sourceFor,catalogGame} from './sources/index.js';
 import {collectMultiplier,queryMultiplier,exportMultiplier} from './multi.js';
@@ -47,6 +48,10 @@ async function collect(env,source=ENABLED_SOURCES[0]){
   for(const group of chunk(newRows,9)) {
    statements.push(db.prepare(`INSERT OR IGNORE INTO rounds(id,platform,game,number,color,minute_epoch,official_period,exact_epoch,precision,source,first_seen) VALUES ${group.map(()=>'(?,?,?,?,?,?,?,?,?,?,?)').join(',')}`)
      .bind(...group.flatMap(x=>[x.id,source.platform,source.game,x.number,x.color,x.minute_epoch,null,null,'minute',source.label,started])));
+  }
+  // Mantem no maximo 500 resultados por plataforma/jogo. A primeira coleta corrige o acervo antigo.
+  if(await shouldPruneHistory(db,source,newRows.length>0)){
+   statements.push(...historyPruneStatements(db,source,'rounds',started));
   }
   // Atualiza o cache somente quando o snapshot mudou, ou durante a migracao inicial.
   if (newRows.length || !snapshot) {
