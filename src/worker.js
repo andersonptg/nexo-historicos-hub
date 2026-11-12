@@ -1,4 +1,5 @@
 import {shouldPruneHistory,historyPruneStatements} from './retention.js';
+import {MIN_COLLECTION_INTERVAL_SECONDS,nextCollectionLeaseAt} from './quota.js';
 import {reconcileSnapshot} from './parser.js';
 import {ENABLED_SOURCES,PLATFORMS,sourceFor,catalogGame} from './sources/index.js';
 import {collectMultiplier,queryMultiplier,exportMultiplier} from './multi.js';
@@ -88,7 +89,7 @@ async function guardedCollect(env,source=ENABLED_SOURCES[0]){
    .bind(source.id,0,0).run();
  const claim=await env.DB.prepare(`UPDATE collection_leases SET next_allowed=?,started_at=?
    WHERE source_id=? AND next_allowed<=?`)
-   .bind(now+5,now,source.id,now).run();
+   .bind(nextCollectionLeaseAt(now),now,source.id,now).run();
  if(Number(claim.meta?.changes||0)!==1)return {ok:true,skipped:true};
  return source.type==='multiplier'?collectMultiplier(env,source):collect(env,source);
 }
@@ -165,7 +166,7 @@ export default {
     const source=sourceFor(platform,game),entry=catalogGame(platform,game);
     return json({source:source?.id||null,source_url:source?.url||entry?.public_url||null,
       connected:!!source,game_kind:entry?.kind||'pending',enabled:source?await sourceEnabled(env,source):false,
-      cron_interval_seconds:60,ui_interval_seconds:5,active_collection_minimum_seconds:5,
+      cron_interval_seconds:60,ui_interval_seconds:5,active_collection_minimum_seconds:MIN_COLLECTION_INTERVAL_SECONDS,
       precision_available:'minute',kind:'third-party-public',status:source?await readSync(env.DB,source):null,now:stamp()});
    }
    if(path==='/api/tick'&&request.method==='POST'){
@@ -178,7 +179,7 @@ export default {
     const source=sourceFor(platform,game);
     if(!source)return json({error:'Fonte ainda não integrada'},409);
     ctx.waitUntil(guardedCollect(env,source));
-    return json({ok:true,queued:true,source:source.id,minimum_interval_seconds:5},202);
+    return json({ok:true,queued:true,source:source.id,minimum_interval_seconds:MIN_COLLECTION_INTERVAL_SECONDS},202);
    }
    if(path==='/api/results'){
     const p=url.searchParams.get('platform')||'smash',g=url.searchParams.get('game')||'double';
