@@ -55,8 +55,8 @@ export function evolve(input,rule,history){
 export const PRESET_MESSAGES=Object.freeze({
  prealert:'🔎 Pré-aviso de sequência\nSequência parcial: {PATTERN}\nAguardando confirmação.',
  entry:'🎯 ENTRAR NO {TARGET}\n- - - - SINAL ATÉ GALE {GALE} - - - -',
- entryRed:'🎯 ENTRAR NO VERMELHO 🔴 OU BRANCO ⚪\n\n- - - - SINAL ATÉ GALE {GALE} - - - -',
- entryBlack:'🎯 ENTRAR NO PRETO ⚫ OU BRANCO ⚪\n\n- - - - SINAL ATÉ GALE {GALE} - - - -',
+ entryRed:'🎯 ENTRAR: VERMELHO 🔴 E BRANCO ⚪\n\n- - - ATÉ {GALE} MARTINGALE - - -',
+ entryBlack:'🎯 ENTRAR: PRETO ⚫ E BRANCO ⚪\n\n- - - ATÉ {GALE} MARTINGALE - - -',
  gale1:'- - - - GALE 1 - - - -',
  gale2:'- - - - GALE 2 - - - -',
  win:'✅ WIN — alvo confirmado na rodada registrada.',

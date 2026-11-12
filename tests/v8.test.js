@@ -40,7 +40,7 @@ test('V8: cor é diferente do número exato',()=>{
 });
 test('V8: templates convertem alvo sem afirmar previsão',()=>{
  const x=eventMessage({type:'entry'},rule,PRESET_MESSAGES);
- assert.match(x,/VERMELHO/);assert.match(x,/BRANCO/);assert.match(x,/GALE 2/);
+ assert.match(x,/VERMELHO/);assert.match(x,/BRANCO/);assert.match(x,/(?:GALE 2|ATÉ 2 MARTINGALE)/);
  assert.equal(eventMessage({type:'clear_prealert'},rule,PRESET_MESSAGES),'');
 });
 test('V8: SQL não exclui resultados existentes e arquivo html contém funções reais',()=>{

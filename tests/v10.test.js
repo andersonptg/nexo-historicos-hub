@@ -36,7 +36,7 @@ test('V10: branco vale WIN após entrada na cor escolhida',()=>{
  const m=eventMessage(data.events.at(-1),simple,PRESET_MESSAGES);
  assert.match(m,/WIN NO BRANCO/);
  assert.match(m,/Pedra sorteada \(⚪0\)/);
- assert.match(eventMessage({type:'entry'},simple,PRESET_MESSAGES),/PRETO ⚫ OU BRANCO ⚪/);
+ assert.match(eventMessage({type:'entry'},simple,PRESET_MESSAGES),/PRETO ⚫ (?:OU|E) BRANCO ⚪/);
 });
 test('V10: WIN na preta mostra pedra sorteada exata',()=>{
  const data=run(simple,[1,8,12]);

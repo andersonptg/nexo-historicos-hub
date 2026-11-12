@@ -12,7 +12,7 @@ const MEDIA_NONE={type:'none',fileId:''};
 // Identificadores públicos de stickers — NUNCA são o token secreto do bot.
 // São valores iniciais: o administrador pode editá-los e salvá-los no D1.
 const STICKER_IDS=Object.freeze({
- activation:'CAACAgEAAxkBAAIBqWr1AAFNPJ3udWd9HnL1rEAhtMIXlQACPAIAAjH3mUfEHBvqNt4HmT0E',
+ activation:'CAACAgEAAxkBAAICVmr1K8RaEGSxAq0TfrnPaGAtO8hzAAIpAgACjCtARpue2z8FxcA3PQQ',
  prealert:'CAACAgEAAxkBAAICVmr1K8RaEGSxAq0TfrnPaGAtO8hzAAIpAgACjCtARpue2z8FxcA3PQQ',
  win:'CAACAgEAAxkBAAIBqWr1AAFNPJ3udWd9HnL1rEAhtMIXlQACPAIAAjH3mUfEHBvqNt4HmT0E',
  winWhite:'CAACAgEAAxkBAAICTGr1KoR_USQZ8Mo2K-SToAUtRmMfAAKgAgACob6YR74uGfmwcRryPQQ',
@@ -33,7 +33,12 @@ export function telegramConfigured(env){return typeof env.TELEGRAM_BOT_TOKEN==='
 export async function getTelegramSettings(db){
  const row=await db.prepare('SELECT settings_json FROM telegram_settings WHERE source_id=?').bind(SOURCE).first();
  let value={};try{value=JSON.parse(row?.settings_json||'{}')}catch{}
- return {...Object.fromEntries(FIELDS.map(k=>[k,typeof value[k]==='boolean'?value[k]:TELEGRAM_DEFAULT[k]])),media:configuredMedia(value.media)};
+ const media=configuredMedia(value.media);
+ // Migração V14: configuração antiga de ativação herdava o sticker WIN.
+ // Apenas a associação antiga conhecida é corrigida; mídia personalizada é preservada.
+ if(media.activation.type==='sticker'&&media.activation.fileId===STICKER_IDS.win)
+  media.activation={...media.prealert};
+ return {...Object.fromEntries(FIELDS.map(k=>[k,typeof value[k]==='boolean'?value[k]:TELEGRAM_DEFAULT[k]])),media};
 }
 // Somente entradas novas, capturadas durante a coleta e com horário recente, entram na fila.
 // O ID do evento e unico: um mesmo resultado nao cria dois envios.
@@ -50,6 +55,18 @@ export function telegramQueueStatement(db,{eventId,sourceId,strategyId,event,bod
  const action=event.type==='cancel_prealert'?'delete':'send';
  const outType=event.type==='win'&&(event.color==='white'||event.number===0)?'winWhite':event.type;
  if(action==='send'&&(!body||!body.trim()))return null;
+ if(event.type==='win'){
+  // Deduplicar apenas a notificacao: o diario individual continua completo.
+  // roundId e compartilhado por todas as estrategias na mesma rodada.
+  const roundId=event.roundId;
+  return db.prepare(`INSERT OR IGNORE INTO telegram_outbox(event_id,source_id,strategy_id,event_type,action,message,status,created_at,next_attempt)
+    SELECT ?,?,?,?,?,?,'pending',?,?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM telegram_outbox
+      WHERE source_id=? AND action='send' AND event_type IN ('win','winWhite')
+      AND event_id LIKE ?
+    )`).bind(eventId,sourceId,strategyId,outType,action,body||'',now,now,sourceId,'%:'+roundId+':win');
+ }
  return db.prepare(`INSERT OR IGNORE INTO telegram_outbox(event_id,source_id,strategy_id,event_type,action,message,status,created_at,next_attempt)
    VALUES(?,?,?,?,?,?, 'pending',?,?)`).bind(eventId,sourceId,strategyId,outType,action,body||'',now,now);
 }
