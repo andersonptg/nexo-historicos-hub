@@ -31,7 +31,7 @@ test('V12: cinco stickers padrão, todos os FILE_ID são editáveis e texto com 
  const db=dbMake();try{const cfg=await getTelegramSettings(db);assert.equal(cfg.deletePrealert,true);assert.equal(cfg.deleteGale,false);assert.equal(cfg.textWithSticker,false);
  for(const key of ['activation','prealert','win','winWhite','red']){assert.equal(cfg.media[key].type,'sticker');assert.ok(cfg.media[key].fileId.length>20);}
  for(const key of ['entry','gale1','gale2'])assert.equal(cfg.media[key].type,'none');
- assert.equal(cfg.media.activation.fileId,cfg.media.win.fileId);
+ assert.equal(cfg.media.activation.fileId,cfg.media.prealert.fileId);assert.notEqual(cfg.media.activation.fileId,cfg.media.win.fileId);
  }finally{db.sqlite.close();}
 });
 
