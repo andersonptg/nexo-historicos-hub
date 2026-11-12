@@ -1,3 +1,4 @@
+// NEXO_V18_MARKER: galeria de stickers e coringa no editor
 const $=id=>document.getElementById(id);
 const PREFS_KEY='nexo-historicos-v7-prefs';
 const types=['activation','prealert','entry','entryRed','entryBlack','gale1','gale2','win','winWhite','red','brand'];
@@ -10,7 +11,7 @@ const send=(path,method,data)=>api(path,{method,headers:{'Content-Type':'applica
 let serverState=null,rules=[],editing=null,pattern=[],winColor='black',useNumbers=false,busy=false,prefs={},knownIds=new Set(),lastStone=null,firstBalls=true,lastEventSeq=0;
 try{prefs=JSON.parse(localStorage.getItem(PREFS_KEY)||'{}')}catch{}
 const emoji={red:'🔴',black:'⚫',white:'⚪'};
-const tokenText=t=>t.kind==='color'?emoji[t.value]:String(t.value);
+const tokenText=t=>t.kind==='any'?'🟦':t.kind==='color'?emoji[t.value]:String(t.value);
 const colorOf=n=>n===0?'white':n<=7?'red':'black';
 const desc=rule=>[...rule.pattern.map(tokenText),'=',...rule.targets.map(tokenText)].join('  ');
 const opt=n=>String(n).padStart(2,'0');
@@ -22,11 +23,11 @@ function flash(message,id='editorMsg',ok=false){const x=$(id);x.textContent=mess
 function prefSave(){localStorage.setItem(PREFS_KEY,JSON.stringify(prefs));}
 // NEXO V10 - EDITOR DE PEDRAS: seleção de cores/números no mesmo campo.
 function makeStone(token,onclick=null,title=''){
- const c=token.kind==='number'?colorOf(token.value):token.value;
+ const c=token.kind==='any'?'any':token.kind==='number'?colorOf(token.value):token.value;
  const el=document.createElement(onclick?'button':'span');
  el.className='stone-tile stone-'+c+(onclick?' clickable':'');
  const circle=document.createElement('span');circle.className='stone-circle';
- circle.textContent=token.kind==='number'?String(token.value):'';
+ circle.textContent=token.kind==='any'?'★':token.kind==='number'?String(token.value):'';
  el.append(circle);
  if(onclick){el.type='button';el.onclick=onclick;el.title=title;el.setAttribute('aria-label',title);}
  return el;
@@ -39,7 +40,7 @@ function renderBuilder(){
  $('useNumbers').checked=useNumbers;
  const picker=$('stonePicker');picker.textContent='';
  const palette=useNumbers?Array.from({length:15},(_,n)=>({kind:'number',value:n})):[{kind:'color',value:'red'},{kind:'color',value:'black'},{kind:'color',value:'white'}];
- for(const token of palette)picker.append(makeStone(token,()=>addToken({...token}),'Adicionar '+(token.kind==='number'?'pedra '+token.value:colors[token.value])));
+ for(const token of [...palette,{kind:'any',value:'any'}])picker.append(makeStone(token,()=>addToken({...token}),'Adicionar '+(token.kind==='any'?'coringa azul (qualquer cor)':token.kind==='number'?'pedra '+token.value:colors[token.value])));
  for(const b of document.querySelectorAll('#winPicker [data-win]')){
   const chosen=b.dataset.win===winColor;b.classList.toggle('chosen',chosen);b.setAttribute('aria-pressed',String(chosen));
  }
@@ -134,6 +135,44 @@ async function pullTelegramMedia(type){
  chosen.classList.toggle('hidden',!telegramMediaCache.length);
  flash(telegramMediaCache.length?'Escolha a mídia na lista do evento.':response.notice,'templateMsg',!!telegramMediaCache.length);
 }
+
+// Galeria visual; escolhe evento, depois salva com os controles existentes.
+function setupStickerGallery(){
+ const target=$('templates');if(!target||$('nexoStickerGallery'))return;
+ const box=document.createElement('section');box.id='nexoStickerGallery';box.className='nexo-sticker-gallery';
+ const title=document.createElement('h3');title.textContent='Biblioteca visual de stickers e GIFs';
+ const note=document.createElement('p');note.className='muted';
+ note.textContent='Envie os stickers ao privado do bot. Escolha o evento e clique em Salvar textos e midias.';
+ const btn=document.createElement('button');btn.className='outline';btn.type='button';btn.textContent='Buscar stickers enviados ao bot';
+ const items=document.createElement('div');items.className='nexo-sticker-results';
+ btn.onclick=()=>safe(async()=>{
+  const data=await api('/api/telegram/media');telegramMediaCache=data.items||[];items.replaceChildren();
+  if(!telegramMediaCache.length){const p=document.createElement('p');p.textContent=data.notice||'Nenhuma midia recente';items.append(p);return;}
+  for(const media of telegramMediaCache){
+   const card=document.createElement('div');card.className='nexo-sticker-card';
+   const img=document.createElement('img');img.alt=media.label||'Sticker';img.loading='lazy';
+   img.src='/api/telegram/media/preview?file_id='+encodeURIComponent(media.previewFileId||media.fileId);
+   img.onerror=()=>{img.style.display='none'};
+   const caption=document.createElement('small');caption.textContent=media.label||media.type;
+   const events=document.createElement('select');
+   for(const type of mediaTypes){const o=document.createElement('option');o.value=type;o.textContent=labels[type]||type;events.append(o)}
+   const use=document.createElement('button');use.type='button';use.className='outline';use.textContent='Usar neste evento';
+   use.onclick=()=>{$('tg-media-type-'+events.value).value=media.type;$('tg-file-id-'+events.value).value=media.fileId;
+    flash('Mídia associada a '+(labels[events.value]||events.value)+'. Agora salve textos e mídias.','templateMsg',true)};
+   card.append(img,caption,events,use);items.append(card);
+  }
+ },'templateMsg');
+ box.append(title,note,btn,items);target.parentElement.insertBefore(box,target);
+ const css=document.createElement('style');css.textContent=`
+ .stone-any .stone-circle{background:linear-gradient(145deg,#54b8ff,#0066e8)!important;border-color:#9ee9ff!important;color:white!important}
+ .nexo-sticker-gallery{border:1px solid #244565;background:#0b172a;border-radius:16px;padding:16px;margin:16px 0}
+ .nexo-sticker-results{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px}
+ .nexo-sticker-card{background:#12233b;border:1px solid #2f4c68;border-radius:14px;display:flex;flex-direction:column;gap:8px;padding:10px;min-width:0}
+ .nexo-sticker-card img{width:100%;height:105px;object-fit:contain;background:#182b42;border-radius:10px}
+ .nexo-sticker-card select,.nexo-sticker-card button{width:100%;min-width:0}
+ `;document.head.append(css);
+}
+
 function collectTelegramMedia(){
  return Object.fromEntries(mediaTypes.map(k=>[k,{type:$('tg-media-type-'+k).value,fileId:$('tg-file-id-'+k).value.trim()}]));
 }
@@ -185,6 +224,7 @@ async function testTelegram(){
  await loadTelegram();
 }
 function initHandlers(){
+ setupStickerGallery();
  $('menuToggle').onclick=()=>{$('sidebar').classList.add('visible');$('menuBackdrop').classList.add('visible');$('menuToggle').setAttribute('aria-expanded','true');};
  const close=()=>{$('sidebar').classList.remove('visible');$('menuBackdrop').classList.remove('visible');$('menuToggle').setAttribute('aria-expanded','false');};$('menuClose').onclick=close;$('menuBackdrop').onclick=close;
  $('loginForm').onsubmit=e=>{e.preventDefault();safe(login,'loginMsg');};

@@ -1,3 +1,4 @@
+// NEXO_V18_MARKER: cancelar ATENCAO e preview da galeria
 // NEXO V9 — Telegram Bot API: envio SOMENTE pelo Worker (token nunca vai ao navegador).
 // Sinais descrevem resultados observados. Não existe previsão confiável ou aposta automática.
 import {authorized,sameOrigin} from './admin.js';
@@ -134,6 +135,13 @@ async function dispatchOne(env,row,now){
      if(row.event_type==='delete_prealert')await db.prepare('DELETE FROM telegram_prealerts WHERE strategy_id=? AND message_id=?').bind(row.strategy_id,messageId).run();
     }
    }else{
+    // Se o padrao falhou, invalide todos os avisos antigos nao enviados.
+    if(row.event_type==='cancel_prealert'){
+     await db.prepare(`UPDATE telegram_outbox SET status='expired',last_error='Padrao nao confirmou'
+      WHERE strategy_id=? AND event_type='prealert' AND action='send'
+      AND queue_id<? AND status IN ('pending','retry')`)
+      .bind(row.strategy_id,row.queue_id).run();
+    }
     await deleteOldPrealert(env,row.strategy_id);
    }
    await db.prepare("UPDATE telegram_outbox SET status='sent',last_error=NULL,sent_at=? WHERE queue_id=?").bind(stamp(),row.queue_id).run();
@@ -235,6 +243,26 @@ export async function handleTelegram(request,env,url){
   const recent=await db.prepare(`SELECT event_type,status,last_error,created_at,sent_at FROM telegram_outbox ORDER BY queue_id DESC LIMIT 12`).all();
   return json({configured:telegramConfigured(env),chatConfigured:!!(env.TELEGRAM_CHAT_ID&&allowedChat(env.TELEGRAM_CHAT_ID.trim())),settings,counts:counts.results,recent:recent.results});
  }
+  // Proxy autenticado de miniaturas. Jamais envia o token ao navegador.
+ if(path==='/api/telegram/media/preview'&&request.method==='GET'){
+   if(!telegramConfigured(env))return json({error:'Bot nao configurado'},409);
+   const id=url.searchParams.get('file_id')||'';
+   if(!validFileId(id))return json({error:'FILE_ID invalido'},400);
+   try{
+    const file=await botCall(env,'getFile',{file_id:id});
+    const name=String(file?.file_path||'');
+    if(!/^[a-zA-Z0-9_./-]{1,256}$/.test(name)||name.includes('..')||!/\.(?:png|jpe?g|webp)$/i.test(name))
+     return json({error:'Miniatura nao disponivel'},415);
+    if(Number(file.file_size||0)>1024*1024)return json({error:'Arquivo muito grande'},413);
+    const r=await fetch('https://api.telegram.org/file/bot'+env.TELEGRAM_BOT_TOKEN+'/'+name,{signal:AbortSignal.timeout(10000)});
+    if(!r.ok)return json({error:'Falha na miniatura'},502);
+    const buf=await r.arrayBuffer();
+    if(buf.byteLength>1024*1024)return json({error:'Arquivo muito grande'},413);
+    const ext=name.split('.').pop().toLowerCase();
+    return new Response(buf,{headers:{'Content-Type':ext==='webp'?'image/webp':ext==='png'?'image/png':'image/jpeg',
+      'Cache-Control':'private, max-age=300','X-Content-Type-Options':'nosniff'}});
+   }catch{return json({error:'Imagem indisponivel'},502)}
+  }
  if(path==='/api/telegram/media'&&request.method==='GET'){
   if(!telegramConfigured(env))return json({error:'Configure o bot e chat ID primeiro.'},409);
   try{
@@ -246,7 +274,7 @@ export async function handleTelegram(request,env,url){
     const msg=item.message||item.channel_post;if(!msg||!(msg.chat?.type==='private'||String(msg.chat?.id)===String(env.TELEGRAM_CHAT_ID)))continue;
     const media=msg.animation||msg.sticker;if(!media||!validFileId(media.file_id)||known.has(media.file_id))continue;
     const type=msg.animation?'animation':'sticker';
-    known.add(media.file_id);list.push({type,fileId:media.file_id,label:(type==='animation'?'GIF':'Sticker')+' · '+new Date((msg.date||stamp())*1000).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'}),id:msg.message_id});
+    known.add(media.file_id);list.push({type,fileId:media.file_id,previewFileId:(media.thumbnail?.file_id||media.thumb?.file_id||media.file_id),label:(type==='animation'?'GIF':'Sticker')+' · '+new Date((msg.date||stamp())*1000).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'}),id:msg.message_id});
     if(list.length>=30)break;
    }
    return json({items:list,notice:list.length?'Escolha a mídia recebida no privado do bot ou no chat configurado.':'Encaminhe as mídias para o bot e atualize. O Telegram mantém updates até 24 horas.'});

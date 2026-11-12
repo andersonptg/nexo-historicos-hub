@@ -1,3 +1,4 @@
+// NEXO_V18_MARKER: coringa no motor do Worker
 // NEXO V10 - EDITOR DE PEDRAS
 // NEXO V8 — Motor determinístico de monitoramento de sequências concluídas.
 // Ordem: mais antigo → mais novo. Os eventos descrevem observações, não previsões.
@@ -7,6 +8,8 @@ export function normalizeToken(value){
  if(!value||typeof value!=='object')throw Error('Elemento inválido');
  const kind=value.kind;
  if(kind==='color'&&COLORS.has(value.value))return {kind,value:value.value};
+ if(kind==='any'&&value.value==='any')return {kind:'any',value:'any'};
+ if(kind==='any'&&value.value==='any')return {kind,value:'any'};
  if(kind==='number'&&Number.isInteger(value.value)&&value.value>=0&&value.value<=14)return {kind,value:value.value};
  throw Error('Use uma cor ou número de 0 a 14');
 }
@@ -17,13 +20,14 @@ export function validateRule(value){
  if(!Array.isArray(value.pattern)||value.pattern.length<1||value.pattern.length>500)throw Error('Sequência precisa ter entre 1 e 500 pedras');
  if(!Array.isArray(value.targets)||value.targets.length<1||value.targets.length>4)throw Error('Escolha entre 1 e 4 alvos');
  const pattern=value.pattern.map(normalizeToken),targets=value.targets.map(normalizeToken);
+ if(targets.some(t=>t.kind==='any'))throw Error('Coringa azul somente no padrao');
  if(new Set(targets.map(x=>`${x.kind}:${x.value}`)).size!==targets.length)throw Error('Alvos repetidos');
  const galeMax=Number(value.galeMax??0);
  if(!Number.isInteger(galeMax)||galeMax<0||galeMax>2)throw Error('Gale máximo é 2');
  if(typeof value.enabled!=='boolean'&&value.enabled!==undefined)throw Error('Estado inválido');
  return {name,pattern,targets,galeMax,enabled:value.enabled===true};
 }
-export function matches(token,round){if(!round)return false;return token.kind==='number'?Number(round.number)===token.value:(round.color||COLOR[round.number])===token.value;}
+export function matches(token,round){if(!round)return false;if(token.kind==='any')return true;return token.kind==='number'?Number(round.number)===token.value:(round.color||COLOR[round.number])===token.value;}
 export function suffixMatches(history,tokens){if(history.length<tokens.length)return false;return tokens.every((t,i)=>matches(t,history[history.length-tokens.length+i]));}
 export function evolve(input,rule,history){
  const current=history.at(-1);if(!current)return {state:input,events:[]};
@@ -68,7 +72,7 @@ export const PRESET_MESSAGES=Object.freeze({
  brand:'🤖 BLAZE PRO NEXO PTG 🤖'
 });
 const colorText={white:'BRANCO ⚪',red:'VERMELHO 🔴',black:'PRETO ⚫'};
-export function tokenText(t){return t.kind==='color'?colorText[t.value]:String(t.value);}
+export function tokenText(t){return t.kind==='any'?'🟦':t.kind==='color'?colorText[t.value]:String(t.value);}
 // V11: somente o resultado WIN mostra a pedra sorteada, uma vez, abaixo do WIN.
 const roundEmoji={red:'🔴',black:'⚫',white:'⚪'};
 export function eventMessage(event,rule,templates=PRESET_MESSAGES){
