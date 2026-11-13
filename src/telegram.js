@@ -70,7 +70,7 @@ export function telegramQueueStatement(db,{eventId,sourceId,strategyId,event,bod
   if(!config.deletePrealert)return null;
  }else if(!['prealert','entry','gale1','gale2','win','red'].includes(event.type)||!config[event.type])return null;
  // A fonte pública possui apenas precisão de minuto; eventos antigos não viram alertas novos.
- if(!Number.isFinite(event.minute_epoch)||Math.abs(now-event.minute_epoch)>180)return null;
+ if(!Number.isFinite(event.minute_epoch)||Math.abs(now-event.minute_epoch)>(['win','red'].includes(event.type)?86400:180))return null;
  const action=event.type==='cancel_prealert'?'delete':'send';
  const outType=event.type==='win'&&(event.color==='white'||event.number===0)?'winWhite':event.type;
  if(action==='send'&&(!body||!body.trim()))return null;
@@ -224,7 +224,7 @@ async function dispatchOne(env,row,now){
  }catch(error){
   // Nunca gravar segredo, URL ou corpo do Telegram no banco/logs.
   const reason=(String(error?.message||'').match(/Telegram HTTP \d{3}/)||[])[0]||'Falha na comunicação com Telegram';
-  const n=Number(row.attempts||0)+1,status=n>=5?'failed':'retry';
+  const n=Number(row.attempts||0)+1,status=(n>=5&&!['win','winWhite','red'].includes(row.event_type))?'failed':'retry';
   const delay=Math.min(300,15*2**Math.min(n,4));
   await db.prepare('UPDATE telegram_outbox SET status=?,next_attempt=?,last_error=? WHERE queue_id=?').bind(status,stamp()+delay,reason,row.queue_id).run();
  }
@@ -242,9 +242,9 @@ export async function flushTelegram(env,max=4){
  for(let i=0;i<max;i++){
   const now=stamp();
   // Pedras antigas nao podem gerar mensagem nova fora de contexto.
-  await env.DB.prepare(`UPDATE telegram_outbox SET status='expired',last_error='Evento antigo' WHERE status IN ('pending','retry','sending') AND action='send' AND created_at<?`).bind(now-180).run();
+  await env.DB.prepare(`UPDATE telegram_outbox SET status='expired',last_error='Evento antigo' WHERE status IN ('pending','retry','sending') AND action='send' AND event_type NOT IN ('win','winWhite','red') AND created_at<?`).bind(now-180).run();
   // Ordem rigorosa: nunca enviar entrada antes do pre-aviso pendente em nova tentativa.
-  const row=await env.DB.prepare(`SELECT * FROM telegram_outbox WHERE status IN ('pending','retry','sending') AND next_attempt<=? ${automatic?'':"AND event_type='activation'"} ORDER BY CASE WHEN event_type IN ('delete_prealert','delete_gale') THEN 0 WHEN event_type='activation' THEN 1 ELSE 2 END,queue_id LIMIT 1`).bind(now).first();
+  const row=await env.DB.prepare(`SELECT * FROM telegram_outbox WHERE status IN ('pending','retry','sending') AND next_attempt<=? ${automatic?'':"AND event_type IN ('activation','win','winWhite','red','delete_gale','delete_prealert')"} ORDER BY CASE WHEN event_type IN ('delete_prealert','delete_gale') THEN 0 WHEN event_type='activation' THEN 1 ELSE 2 END,queue_id LIMIT 1`).bind(now).first();
   if(!row)break;
   if(await dispatchOne(env,row,now))processed++;else break;
   if(i+1<max)await wait(1050); // Evita excesso de mensagens por segundo no mesmo chat.

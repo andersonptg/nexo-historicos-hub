@@ -59,7 +59,7 @@ export async function handleStrategies(request,env,url){
   const next={...old,...Object.fromEntries(['automatic','prealert','entry','fireworks'].filter(k=>k in data).map(k=>[k,data[k]])),templates};
   const writes=[db.prepare(`INSERT INTO strategy_settings(source_id,config_json,updated_at) VALUES(?,?,?)
    ON CONFLICT(source_id) DO UPDATE SET config_json=excluded.config_json,updated_at=excluded.updated_at`).bind(SMASH,JSON.stringify(next),stamp())];
-  if(old.automatic&&!next.automatic)writes.push(db.prepare("DELETE FROM strategy_runtime WHERE strategy_id IN (SELECT id FROM strategies WHERE platform='smash' AND game='double')"));
+  // Preserve operações em andamento quando o monitoramento for pausado.
   // Com o envio Telegram já ligado, iniciar o monitoramento gera ATENÇÃO uma única vez.
   let activated=false;
   if(!old.automatic&&next.automatic){const tg=await getTelegramSettings(db);
@@ -83,7 +83,7 @@ export async function handleStrategies(request,env,url){
    await db.batch([db.prepare('DELETE FROM strategy_events WHERE strategy_id=?').bind(m[1]),db.prepare('DELETE FROM strategy_runtime WHERE strategy_id=?').bind(m[1]),db.prepare('DELETE FROM strategies WHERE id=?').bind(m[1])]);return json({ok:true});
   }
   let value;try{value=validateRule(await read(request));}catch(e){return json({error:e.message},400)}
-  const previous=parseRule(existing),different=JSON.stringify(previous.pattern)!==JSON.stringify(value.pattern)||JSON.stringify(previous.targets)!==JSON.stringify(value.targets)||previous.galeMax!==value.galeMax||previous.enabled!==value.enabled;
+  const previous=parseRule(existing),different=JSON.stringify(previous.pattern)!==JSON.stringify(value.pattern)||JSON.stringify(previous.targets)!==JSON.stringify(value.targets)||previous.galeMax!==value.galeMax;
   await db.batch([
    db.prepare('UPDATE strategies SET definition=?,enabled=?,updated_at=? WHERE id=?').bind(JSON.stringify(value),value.enabled?1:0,stamp(),m[1]),
    ...(different?[db.prepare('DELETE FROM strategy_runtime WHERE strategy_id=?').bind(m[1])]:[])
@@ -130,12 +130,13 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
   }
  }
  const settings=await getSettings(db);
- if(!settings.automatic){await db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id).run();return {paused:true,new:index};}
+ // Uma pausa impede novas entradas, mas não abandona operações já iniciadas.
+
  // V22: nao abandonar operacao ja iniciada se a regra for pausada durante um GALE.
  const allRules=await loadRules(db);
  const activeRows=(await db.prepare('SELECT strategy_id,state_json FROM strategy_runtime').bind().all()).results;
  const activeIds=new Set(activeRows.filter(x=>parseJSON(x.state_json)?.active).map(x=>x.strategy_id));
- const rules=allRules.filter(x=>x.enabled||activeIds.has(x.id));
+ const rules=allRules.filter(x=>x.enabled||activeIds.has(x.id)).filter(x=>(settings.automatic&&x.enabled)||activeIds.has(x.id));
  const stateRows=rules.length?(await db.prepare('SELECT * FROM strategy_runtime WHERE strategy_id IN ('+rules.map(()=>'?').join(',')+')').bind(...rules.map(x=>x.id)).all()).results:[];
  const states=new Map(stateRows.map(x=>[x.strategy_id,parseJSON(x.state_json)||{active:null,prealertRoundId:null}]));
  const telegram=await getTelegramSettings(db);
@@ -160,6 +161,10 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
     continue;
    }
    if(finished||chosen){
+    states.set(rule.id,{active:null,prealertRoundId:null,recent:[...(previous.recent||[]),current].slice(-rule.pattern.length)});
+    continue;
+   }
+   if((!rule.enabled||!settings.automatic)&&!previous.active){
     states.set(rule.id,{active:null,prealertRoundId:null,recent:[...(previous.recent||[]),current].slice(-rule.pattern.length)});
     continue;
    }
