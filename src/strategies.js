@@ -159,16 +159,38 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
  if(index<0||index>25){
   // V17: quando o cursor some, nao descartar a operacao ativa.
   // Reconstroi somente a partir do ultimo evento da operacao persistido no D1.
-  const runtime=(await db.prepare("SELECT r.strategy_id,r.state_json FROM strategy_runtime r JOIN strategies s ON s.id=r.strategy_id WHERE s.platform='smash' AND s.game='double' AND s.enabled=1").all()).results;
-  const active=runtime.find(row=>{try{return !!JSON.parse(row.state_json)?.active;}catch{return false;}});
-  if(active){
-   const progress=(await db.prepare("SELECT round_id FROM strategy_events WHERE strategy_id=? AND event_type IN ('entry','gale1','gale2') ORDER BY rowid DESC LIMIT 12").bind(active.strategy_id).all()).results;
-   const anchor=progress.map(row=>roundIds.indexOf(row.round_id)).find(position=>position>=0);
-   if(anchor===undefined){
-    console.warn('NEXO V17: operacao ativa sem rodada ancora no historico; cursor preservado');
-    return {stalled:true,warning:'Operacao ativa: impossivel confirmar rodadas sem identificador; cursor preservado'};
+  // V28: recuperacao conservadora de operacoes irrecuperaveis, sem criar WIN/RED ficticio.
+  // Respeita 15 minutos para uma fonte temporariamente inconsistente se recuperar.
+  const runtime=(await db.prepare("SELECT r.strategy_id,r.state_json,r.updated_at FROM strategy_runtime r JOIN strategies s ON s.id=r.strategy_id WHERE s.platform='smash' AND s.game='double'").all()).results;
+  const actives=runtime.filter(row=>!!parseJSON(row.state_json)?.active);
+  if(actives.length){
+   const anchors=[];
+   for(const active of actives){
+    const progress=(await db.prepare("SELECT round_id FROM strategy_events WHERE strategy_id=? AND event_type IN ('entry','gale1','gale2') ORDER BY rowid DESC LIMIT 12").bind(active.strategy_id).all()).results;
+    const candidate=progress.map(row=>roundIds.indexOf(row.round_id)).find(position=>position>=0&&position<=25);
+    if(candidate!==undefined)anchors.push(candidate);
    }
-   index=anchor;
+   if(!anchors.length){
+    if(actives.some(row=>now-Number(row.updated_at||0)<900)){
+     console.warn('NEXO V28: ancora nao encontrada; aguardando janela de recuperacao');
+     return {stalled:true,warning:'Operacao recente sem ancora; aguardando ate 15 minutos'};
+    }
+    const writes=actives.map(row=>{
+     const previous=parseJSON(row.state_json)||{};
+     const recovered={...previous,active:null,prealertRoundId:null,recent:[],
+      interruptedAt:now,interruptedReason:'ancora_ausente_mais_15_min'};
+     return db.prepare('UPDATE strategy_runtime SET state_json=?,updated_at=? WHERE strategy_id=?')
+      .bind(JSON.stringify(recovered),now,row.strategy_id);
+    });
+    // Atualiza cursores e estados na mesma transacao. Nao apaga historicos ou eventos.
+    writes.push(db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?')
+     .bind(newest,now,source.id));
+    await db.batch(writes);
+    console.warn('NEXO V28: operacao antiga interrompida por ausencia de ancora; nenhum sinal retroativo enviado');
+    return {reset:true,interrupted:true,warning:'Operacao antiga sem ancora arquivada; retomada a partir da proxima rodada'};
+   }
+   // Recuperar somente a janela proxima e comprovada pelo snapshot.
+   index=Math.min(...anchors);
   }else{
    await db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id).run();
    return {reset:true,warning:'historico interrompido sem operacao ativa'};
