@@ -30,6 +30,24 @@ function normalizeMedia(value){
 const configuredMedia=value=>Object.fromEntries(MEDIA_EVENTS.map(k=>[k,(()=>{try{return normalizeMedia(value?.[k]||defaultMedia(k))}catch{return defaultMedia(k)}})()]));
 export const TELEGRAM_DEFAULT=Object.freeze({enabled:false,prealert:true,entry:true,gale1:true,gale2:true,win:true,red:true,deletePrealert:true,deleteGale:false,textWithSticker:false});
 const allowedChat=id=>/^-?\d{5,20}$/.test(id)||/^@[a-zA-Z0-9_]{5,32}$/.test(id);
+const cleanDestinations=(items)=>{
+ if(!Array.isArray(items))return [];
+ const seen=new Set(),out=[];
+ for(const x of items.slice(0,30)){
+  const id=String(x?.id||'').trim(),name=String(x?.name||id).trim().slice(0,80);
+  if(!allowedChat(id)||seen.has(id))continue;
+  seen.add(id);out.push({id,name:name||id});
+  if(out.length>=15)break;
+ }
+ return out;
+};
+function targetForRequest(data,settings,env){
+ const id=String(data?.destination||env.TELEGRAM_CHAT_ID||'').trim();
+ if(id===String(env.TELEGRAM_CHAT_ID||'').trim()&&allowedChat(id))return id;
+ if(settings.destinations.some(x=>x.id===id))return id;
+ throw Error('Destino não cadastrado');
+}
+
 export function telegramConfigured(env){return typeof env.TELEGRAM_BOT_TOKEN==='string' && /^\d{5,15}:[a-zA-Z0-9_-]{25,}$/.test(env.TELEGRAM_BOT_TOKEN) && typeof env.TELEGRAM_CHAT_ID==='string'&&allowedChat(env.TELEGRAM_CHAT_ID.trim());}
 export async function getTelegramSettings(db){
  const row=await db.prepare('SELECT settings_json FROM telegram_settings WHERE source_id=?').bind(SOURCE).first();
@@ -39,7 +57,7 @@ export async function getTelegramSettings(db){
  // Apenas a associação antiga conhecida é corrigida; mídia personalizada é preservada.
  if(media.activation.type==='sticker'&&media.activation.fileId===STICKER_IDS.win)
   media.activation={...media.prealert};
- return {...Object.fromEntries(FIELDS.map(k=>[k,typeof value[k]==='boolean'?value[k]:TELEGRAM_DEFAULT[k]])),media};
+ return {...Object.fromEntries(FIELDS.map(k=>[k,typeof value[k]==='boolean'?value[k]:TELEGRAM_DEFAULT[k]])),media,destinations:cleanDestinations(value.destinations)};
 }
 // Somente entradas novas, capturadas durante a coleta e com horário recente, entram na fila.
 // O ID do evento e unico: um mesmo resultado nao cria dois envios.
@@ -237,6 +255,63 @@ export async function handleTelegram(request,env,url){
  if(!await authorized(request,env))return json({error:'Sessão administrativa necessária'},401);
  if(request.method!=='GET'&&!sameOrigin(request))return json({error:'Origem recusada'},403);
  const path=url.pathname,db=env.DB;
+ if(path==='/api/telegram/destinations/discover'&&request.method==='GET'){
+  if(!telegramConfigured(env))return json({error:'Bot não configurado'},409);
+  try{
+   const updates=await botCall(env,'getUpdates',{limit:100,timeout:0,allowed_updates:['message','channel_post','my_chat_member']});
+   const found=new Map();
+   for(const update of updates){
+    const chat=update.message?.chat||update.channel_post?.chat||update.my_chat_member?.chat;
+    if(!chat||!['group','supergroup','channel'].includes(chat.type))continue;
+    const id=String(chat.id);
+    if(allowedChat(id))found.set(id,{id,name:String(chat.title||id).slice(0,80)});
+   }
+   return json({items:[...found.values()].slice(0,30),notice:'Apenas conversas presentes nas atualizações recentes; canais e grupos antigos podem exigir cadastro manual.'});
+  }catch{return json({error:'Não foi possível consultar atualizações. Um webhook ou outro leitor pode estar usando o bot.'},502);}
+ }
+ if(path==='/api/telegram/destinations'&&request.method==='PUT'){
+  let body;try{body=await request.json()}catch{return json({error:'JSON inválido'},400)}
+  if(!Array.isArray(body?.items)||body.items.length>15||body.items.some(x=>!allowedChat(String(x?.id||'').trim())))return json({error:'Lista de destinos inválida (máximo 15)'},400);
+  const previous=await getTelegramSettings(db),next={...previous,destinations:cleanDestinations(body.items)};
+  await db.prepare(`INSERT INTO telegram_settings(source_id,settings_json,updated_at) VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET settings_json=excluded.settings_json,updated_at=excluded.updated_at`).bind(SOURCE,JSON.stringify(next),stamp()).run();
+  return json({ok:true,items:next.destinations});
+ }
+ if(path==='/api/telegram/scoreboard'&&request.method==='POST'){
+  if(!telegramConfigured(env))return json({error:'Bot ou destino nao configurado'},409);
+  let data;try{data=await request.json();}catch{return json({error:'JSON invalido'},400);}
+  if(typeof data?.strategyId!=='string'||!/^[0-9a-f-]{36}$/.test(data.strategyId))return json({error:'Estrategia invalida'},400);
+  const rule=await db.prepare('SELECT definition FROM strategies WHERE id=? AND platform=? AND game=?').bind(data.strategyId,'smash','double').first();
+  if(!rule)return json({error:'Estrategia nao encontrada'},404);
+  const score=await db.prepare(`SELECT
+    SUM(CASE WHEN event_type='win' THEN 1 ELSE 0 END) AS wins,
+    SUM(CASE WHEN event_type='win' AND round_number=0 THEN 1 ELSE 0 END) AS white_wins,
+    SUM(CASE WHEN event_type='red' THEN 1 ELSE 0 END) AS reds,
+    SUM(CASE WHEN event_type='gale1' THEN 1 ELSE 0 END) AS gale1,
+    SUM(CASE WHEN event_type='gale2' THEN 1 ELSE 0 END) AS gale2
+    FROM strategy_events WHERE strategy_id=? AND source_id=?`).bind(data.strategyId,SOURCE).first();
+  let name='Estrategia';try{name=String(JSON.parse(rule.definition).name||name).slice(0,70)}catch{}
+  const wins=Number(score?.wins||0),reds=Number(score?.reds||0),closed=wins+reds;
+  const message=`📊 NEXO — ${name}\nWIN: ${wins} (branco: ${Number(score?.white_wins||0)})\nRED: ${reds}\nGale 1: ${Number(score?.gale1||0)} | Gale 2: ${Number(score?.gale2||0)}\nAcerto: ${closed?(wins*100/closed).toFixed(1):'0.0'}% (${closed} encerradas)`;
+  let target;try{target=targetForRequest(data,await getTelegramSettings(db),env)}catch{return json({error:'Destino não cadastrado'},400)}
+  try{
+   const result=await botCall(env,'sendMessage',{chat_id:target,text:message,link_preview_options:{is_disabled:true}});
+   return json({ok:true,messageId:result?.message_id??null});
+  }catch{return json({error:'Falha no envio do placar. Verifique o destino do bot.'},502);}
+ }
+ if(path==='/api/telegram/referral'&&request.method==='POST'){
+  if(!telegramConfigured(env))return json({error:'Bot ou destino nao configurado'},409);
+  let data;try{data=await request.json();}catch{return json({error:'JSON invalido'},400);}
+  const message=String(data?.message||'').trim(),link=String(data?.link||'').trim();
+  if(!message||message.length>1500)return json({error:'Mensagem deve ter de 1 a 1500 caracteres'},400);
+  let parsed;try{parsed=new URL(link);}catch{return json({error:'Link invalido'},400);}
+  if(!['https:','http:'].includes(parsed.protocol)||!parsed.hostname||parsed.username||parsed.password||link.length>1500)return json({error:'Use um link HTTP(S) valido, sem credenciais'},400);
+  const text=message+'\n\n'+link;
+  let target;try{target=targetForRequest(data,await getTelegramSettings(db),env)}catch{return json({error:'Destino não cadastrado'},400)}
+  try{
+   const result=await botCall(env,'sendMessage',{chat_id:target,text,link_preview_options:{is_disabled:false}});
+   return json({ok:true,messageId:result?.message_id??null});
+  }catch{return json({error:'Falha no envio. Verifique as permissoes e o destino do bot.'},502);}
+ }
  if(path==='/api/telegram/status'&&request.method==='GET'){
   const settings=await getTelegramSettings(db);
   const counts=await db.prepare(`SELECT status,COUNT(*) AS n FROM telegram_outbox GROUP BY status`).all();

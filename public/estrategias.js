@@ -80,9 +80,15 @@ function drawRules(){const host=$('strategies');host.textContent='';$('strategyC
  const status=document.createElement('span');status.textContent=rule.enabled?'● Ativa':'○ Pausada';status.className='rule-status'+(rule.enabled?' on':'');top.append(name,status);
  const seq=document.createElement('div');seq.className='rule-seq';appendTokenList(seq,rule.pattern);seq.append(document.createTextNode(' = '));appendTokenList(seq,rule.targets);if(rule.targets.some(x=>x.kind==='color')&&!rule.targets.some(x=>x.kind==='color'&&x.value==='white')){seq.append(document.createTextNode(' OU '));appendTokenList(seq,[{kind:'color',value:'white'}]);}
  const sub=document.createElement('p');sub.className='rule-extra';sub.textContent=`Gale máximo: ${rule.galeMax} · Estratégia local sem apostas · Fonte Smash Double`;
+ const score=(serverState?.score||[]).find(x=>x.strategy_id===rule.id)||{};
+ const wins=Number(score.wins||0),reds=Number(score.reds||0),closed=wins+reds;
+ const scoreText=`📊 ${rule.name}\nWIN: ${wins} (branco: ${Number(score.white_wins||0)})\nRED: ${reds}\nGale 1: ${Number(score.gale1||0)} | Gale 2: ${Number(score.gale2||0)}\nAcerto: ${closed?(100*wins/closed).toFixed(1):'0.0'}% (${closed} encerradas)`;
+ const scoreLine=document.createElement('p');scoreLine.className='rule-extra';scoreLine.textContent=scoreText;
  const actions=document.createElement('div');actions.className='rule-actions';
+ actions.append(button('📋 Copiar placar',()=>safe(async()=>{await navigator.clipboard.writeText(scoreText);flash('Placar copiado.','editorMsg',true);})));
+ actions.append(button('✉ Enviar placar ao bot',()=>safe(async()=>{if(!confirm('Enviar o placar desta estrategia ao Telegram cadastrado?'))return;await send('/api/telegram/scoreboard','POST',{strategyId:rule.id,destination:$('manualDestination').value});flash('Placar enviado ao Telegram.','editorMsg',true);})));
  actions.append(button('✎ Editar',()=>loadEditor(rule)),button(rule.enabled?'⏸ Pausar':'▶ Ativar',()=>safe(async()=>{await send(`/api/strategies/${rule.id}`,'PUT',{...rule,enabled:!rule.enabled});await loadState(false);})),button('▣ Duplicar',()=>safe(async()=>{await send('/api/strategies','POST',{...rule,name:(rule.name+' (cópia)').slice(0,70),enabled:false});await loadState(false);})),button('✕ Excluir',()=>safe(async()=>{if(!confirm('Excluir esta estratégia e seus eventos históricos?'))return;await api(`/api/strategies/${rule.id}`,{method:'DELETE'});await loadState(false);},'editorMsg'),'danger'));
- card.append(top,seq,sub,actions);host.append(card);
+ card.append(top,seq,sub,scoreLine,actions);host.append(card);
  }
 }
 function drawEvents(){const host=$('events');host.textContent='';const logs=serverState?.events||[];
@@ -203,7 +209,7 @@ function celebrate(){if(matchMedia('(prefers-reduced-motion: reduce)').matches)r
 const tgFields=['enabled','prealert','entry','gale1','gale2','win','red','deletePrealert','deleteGale','textWithSticker'];
 let telegramReady=false;
 async function loadTelegram(){
- const status=await api('/api/telegram/status');telegramReady=!!status.configured;telegramSettingsCache=status.settings;drawTemplates();
+ const status=await api('/api/telegram/status');telegramReady=!!status.configured;telegramSettingsCache=status.settings;drawTemplates();await loadDestinations();
  for(const field of tgFields)$('tg-'+field).checked=!!status.settings[field];
  $('telegramConnection').textContent=status.configured
   ? '⚙️ Segredos presentes (formato válido). Faça o teste de envio. '+(status.settings.enabled?'Envio habilitado.':'Envio de sinais desativado.')
@@ -211,6 +217,35 @@ async function loadTelegram(){
  const list=status.recent||[];
  const summary=(status.counts||[]).map(x=>`${x.status}: ${x.n}`).join(' · ');
  $('telegramDelivery').textContent=(summary||'Nenhuma mensagem na fila')+(list.length?'\nÚltimas tentativas:\n'+list.slice(0,8).map(x=>`${x.event_type} — ${x.status}${x.last_error?' ('+x.last_error+')':''}`).join('\n'):'');
+}
+async function loadDestinations(){
+ const data=await api('/api/telegram/status');
+ const items=data.settings?.destinations||[];
+ const box=$('destinationsList'),select=$('manualDestination');box.replaceChildren();select.replaceChildren();
+ const def=document.createElement('option');def.value='';def.textContent='Destino principal do Worker';select.append(def);
+ for(const item of items){
+  const opt=document.createElement('option');opt.value=item.id;opt.textContent=item.name+' ('+item.id+')';select.append(opt);
+  const line=document.createElement('div');line.textContent=item.name+' · '+item.id+' ';
+  const remove=document.createElement('button');remove.type='button';remove.textContent='Excluir';remove.onclick=()=>safe(async()=>{
+   await send('/api/telegram/destinations','PUT',{items:items.filter(x=>x.id!==item.id)});await loadDestinations();
+  },'destinationMessage');line.append(remove);box.append(line);
+ }
+ if(!items.length)box.textContent='Nenhum destino adicional cadastrado.';
+}
+async function addDestination(){
+ const id=$('destinationId').value.trim(),name=$('destinationName').value.trim();
+ const data=await api('/api/telegram/status');const items=data.settings?.destinations||[];
+ await send('/api/telegram/destinations','PUT',{items:[...items.filter(x=>x.id!==id),{id,name:name||id}]});
+ await loadDestinations();flash('Destino cadastrado.','destinationMessage',true);
+}
+async function discoverDestinations(){
+ const data=await api('/api/telegram/destinations/discover');
+ if(!data.items.length){flash(data.notice||'Nenhum destino encontrado. Cadastre pelo Chat ID.','destinationMessage');return;}
+ const existing=(await api('/api/telegram/status')).settings?.destinations||[];
+ const ids=new Set(existing.map(x=>x.id));
+ const merged=[...existing,...data.items.filter(x=>!ids.has(x.id))].slice(0,15);
+ await send('/api/telegram/destinations','PUT',{items:merged});await loadDestinations();
+ flash('Destinos encontrados e cadastrados: '+data.items.length,'destinationMessage',true);
 }
 async function saveTelegram(){
  const data=Object.fromEntries(tgFields.map(k=>[k,$('tg-'+k).checked]));
@@ -225,12 +260,19 @@ async function testTelegram(){
 }
 function initHandlers(){
  setupStickerGallery();
+ $('saveDestination').onclick=()=>safe(addDestination,'destinationMessage');
+ $('discoverDestinations').onclick=()=>safe(discoverDestinations,'destinationMessage');
  $('menuToggle').onclick=()=>{$('sidebar').classList.add('visible');$('menuBackdrop').classList.add('visible');$('menuToggle').setAttribute('aria-expanded','true');};
  const close=()=>{$('sidebar').classList.remove('visible');$('menuBackdrop').classList.remove('visible');$('menuToggle').setAttribute('aria-expanded','false');};$('menuClose').onclick=close;$('menuBackdrop').onclick=close;
  $('loginForm').onsubmit=e=>{e.preventDefault();safe(login,'loginMsg');};
  $('telegramSave').onclick=()=>safe(saveTelegram,'telegramMessage');
  $('telegramTest').onclick=()=>safe(testTelegram,'telegramMessage');
  $('telegramReload').onclick=()=>safe(loadTelegram,'telegramMessage');
+ $('referralSend').onclick=()=>safe(async()=>{
+  if(!confirm('Enviar esta mensagem e link ao destino Telegram cadastrado?'))return;
+  const result=await send('/api/telegram/referral','POST',{message:$('referralMessage').value,link:$('referralLink').value,destination:$('manualDestination').value});
+  flash('Mensagem enviada. ID: '+result.messageId,'referralStatus',true);
+ },'referralStatus');
  $('logout').onclick=()=>safe(async()=>{await api('/api/admin/logout',{method:'POST'});showLogin('Sessão encerrada.');});
  for(const key of ['automatic','prealert','entry','fireworks'])$(key).onchange=()=>safe(()=>changeSetting(key),'saveMsg');
  for(const key of ['order','flow','clock'])$(key).onchange=()=>{prefs[key]=$(key).value;prefSave();readBalls();};

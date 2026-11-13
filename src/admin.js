@@ -63,10 +63,17 @@ export async function adminHandler(request,env,url){
  if(path==='/api/admin/control'&&request.method==='POST'){
   let body;try{body=await request.json();}catch{return json({error:'JSON inválido'},400)}
   if(!ENABLED_SOURCES.some(s=>s.id===body?.id)||typeof body.enabled!=='boolean')return json({error:'Fonte inválida'},400);
+  // Confirma a escrita antes de declarar sucesso. Uma fonte reativada nao deve
+  // ficar presa no lease de uma coleta anterior.
   await env.DB.prepare(`INSERT INTO source_controls(source_id,enabled,updated_at) VALUES(?,?,?)
   ON CONFLICT(source_id) DO UPDATE SET enabled=excluded.enabled,updated_at=excluded.updated_at`)
    .bind(body.id,body.enabled?1:0,now()).run();
-  return json({ok:true,source:body.id,enabled:body.enabled});
+  const confirmed=await env.DB.prepare('SELECT enabled FROM source_controls WHERE source_id=?').bind(body.id).first();
+  if(Number(confirmed?.enabled)!==(body.enabled?1:0))return json({error:'Nao foi possivel confirmar a alteracao no D1'},503);
+  if(body.enabled){
+   await env.DB.prepare('UPDATE collection_leases SET next_allowed=0 WHERE source_id=?').bind(body.id).run();
+  }
+  return json({ok:true,source:body.id,enabled:body.enabled,confirmed:true});
  }
  return json({error:'Rota administrativa não encontrada'},404);
 }

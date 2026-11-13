@@ -24,10 +24,18 @@ function parseRule(row){return {...validateRule({...parseJSON(row.definition),en
 function validSource(url){return (url.searchParams.get('platform')||'smash')==='smash'&&(url.searchParams.get('game')||'double')==='double';}
 async function loadRules(db){const r=await db.prepare('SELECT * FROM strategies WHERE platform=? AND game=? ORDER BY created_at DESC,id DESC').bind('smash','double').all();return r.results.map(parseRule);}
 async function loadState(db){
- const [strategies,settings,events]=await Promise.all([
-  loadRules(db),getSettings(db),db.prepare('SELECT rowid AS seq,* FROM strategy_events WHERE source_id=? ORDER BY rowid DESC LIMIT 100').bind(SMASH).all()
+ const [strategies,settings,events,score]=await Promise.all([
+  loadRules(db),getSettings(db),db.prepare('SELECT rowid AS seq,* FROM strategy_events WHERE source_id=? ORDER BY rowid DESC LIMIT 100').bind(SMASH).all(),
+  db.prepare(`SELECT strategy_id,
+    SUM(CASE WHEN event_type='entry' THEN 1 ELSE 0 END) AS entries,
+    SUM(CASE WHEN event_type='win' THEN 1 ELSE 0 END) AS wins,
+    SUM(CASE WHEN event_type='win' AND round_number=0 THEN 1 ELSE 0 END) AS white_wins,
+    SUM(CASE WHEN event_type='red' THEN 1 ELSE 0 END) AS reds,
+    SUM(CASE WHEN event_type='gale1' THEN 1 ELSE 0 END) AS gale1,
+    SUM(CASE WHEN event_type='gale2' THEN 1 ELSE 0 END) AS gale2
+    FROM strategy_events WHERE source_id=? GROUP BY strategy_id`).bind(SMASH).all()
  ]);
- return {platform:'smash',game:'double',precision:'minute',telegramConnected:false,settings,strategies,events:events.results};
+ return {platform:'smash',game:'double',precision:'minute',telegramConnected:false,settings,strategies,events:events.results,score:score.results};
 }
 export async function handleStrategies(request,env,url){
  // Todas as estratégias e alertas permanecem privados, inclusive as leituras.

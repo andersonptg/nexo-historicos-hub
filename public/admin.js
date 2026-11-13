@@ -35,7 +35,7 @@ async function loadSources(){
    const tdAction=document.createElement('td'),button=document.createElement('button');button.textContent=s.enabled?'Pausar':'Ativar';
    button.addEventListener('click',async()=>{
     button.disabled=true;
-    try{await call('/api/admin/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:s.id,enabled:!s.enabled})});await loadSources();}
+    try{const changed=await call('/api/admin/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:s.id,enabled:!s.enabled})});if(!changed.confirmed||changed.enabled===s.enabled)throw Error('Alteracao nao confirmada pelo servidor');await loadSources();$('sourceMsg').textContent='Fonte '+s.platform+' / '+s.game+(changed.enabled?' reativada. Aguarde a proxima coleta.':' pausada.') ;}
     catch(e){$('sourceMsg').textContent=e.message;button.disabled=false;}
    });tdAction.append(button);tr.append(tdName,tdStatus,tdDate,tdAction);$('sources').append(tr);
   }
