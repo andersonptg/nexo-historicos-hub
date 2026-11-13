@@ -43,6 +43,51 @@ export async function handleStrategies(request,env,url){
  if(!await authorized(request,env))return json({error:'Entre como administrador para acessar estratégias.'},401);
  if(request.method!=='GET'&&!sameOrigin(request))return json({error:'Origem recusada'},403);
  const path=url.pathname,db=env.DB;
+
+  // V27: diagnostico somente leitura, protegido pela sessao ADM.
+  if(path==='/api/strategies/diagnostics'&&request.method==='GET'){
+   const [cursor,cache,sync,runtimes,events,counts,recent]=await Promise.all([
+    db.prepare('SELECT last_round_id,last_updated FROM strategy_cursors WHERE source_id=?').bind(SMASH).first(),
+    db.prepare('SELECT payload,last_updated FROM snapshot_cache WHERE source_id=?').bind(SMASH).first(),
+    db.prepare('SELECT last_success,last_new,last_count FROM sync_status WHERE source_id=?').bind(SMASH).first(),
+    db.prepare("SELECT r.strategy_id,r.state_json,r.updated_at,s.enabled FROM strategy_runtime r JOIN strategies s ON s.id=r.strategy_id WHERE s.platform='smash' AND s.game='double'").all(),
+    db.prepare('SELECT strategy_id,event_type,round_id,round_number,minute_epoch,created_at FROM strategy_events WHERE source_id=? ORDER BY rowid DESC LIMIT 100').bind(SMASH).all(),
+    db.prepare("SELECT event_type,status,COUNT(*) AS total FROM telegram_outbox WHERE source_id=? AND event_type IN ('win','winWhite','red') GROUP BY event_type,status").bind(SMASH).all(),
+    db.prepare("SELECT event_type,status,attempts,last_error,created_at,sent_at,telegram_message_id FROM telegram_outbox WHERE source_id=? AND event_type IN ('win','winWhite','red') ORDER BY queue_id DESC LIMIT 12").bind(SMASH).all()
+   ]);
+   const parsed=parseJSON(cache?.payload),rows=Array.isArray(parsed)?parsed:[];
+   const cursorIndex=cursor?rows.findIndex(r=>r.round_id===cursor.last_round_id):-1;
+   const log=events.results||[];
+   const active=(runtimes.results||[]).flatMap(r=>{
+    const a=parseJSON(r.state_json)?.active;
+    if(!a)return [];
+    const progress=log.filter(e=>e.strategy_id===r.strategy_id&&['entry','gale1','gale2'].includes(e.event_type));
+    return [{rule_enabled:!!r.enabled,step:Number(a.step||0),updated_at:r.updated_at,
+     entry_in_snapshot:rows.some(x=>x.round_id===a.entryRoundId),
+     anchor_in_snapshot:progress.some(e=>rows.some(x=>x.round_id===e.round_id)),
+     last_progress_at:progress[0]?.created_at??null}];
+   });
+   const now=stamp(),warnings=[];
+   if(cursor&&cursorIndex<0)warnings.push('cursor_fora_do_snapshot');
+   if(cursor&&cursorIndex>25)warnings.push('cursor_mais_de_25_rodadas_atrasado');
+   if(active.some(a=>!a.anchor_in_snapshot))warnings.push('operacao_ativa_sem_ancora');
+   if(cursor&&now-Number(cursor.last_updated)>180&&sync?.last_success&&now-Number(sync.last_success)<180)
+    warnings.push('motor_parado_com_coleta_recente');
+   return json({read_only:true,checked_at:now,warnings,
+    collection:{last_success:sync?.last_success??null,last_new:sync?.last_new??null,last_count:sync?.last_count??null},
+    snapshot:{size:rows.length,last_updated:cache?.last_updated??null},
+    cursor:{exists:!!cursor,index:cursorIndex,last_updated:cursor?.last_updated??null,
+     age_seconds:cursor?Math.max(0,now-Number(cursor.last_updated)):null},
+    active_operations:active,active_count:active.length,
+    recent_results:log.filter(e=>['win','red'].includes(e.event_type)).slice(0,12).map(e=>({
+     type:e.event_type,stone:e.round_number,minute:e.minute_epoch,recorded:e.created_at,
+     round_in_snapshot:rows.some(x=>x.round_id===e.round_id)})),
+    telegram:{counts:counts.results||[],recent:(recent.results||[]).map(r=>({
+     type:r.event_type,status:r.status,attempts:r.attempts,error:r.last_error,
+     created:r.created_at,sent:r.sent_at,message_confirmed:!!r.telegram_message_id}))}
+   });
+  }
+
  if(path==='/api/strategies/state'&&request.method==='GET')return json(await loadState(db));
  if(path==='/api/strategies/events'&&request.method==='GET'){
   const after=Number(url.searchParams.get('after')||0);
