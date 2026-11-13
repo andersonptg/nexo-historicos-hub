@@ -138,6 +138,15 @@ function deletionStatement(db,row,kind,messageId,now){
  return db.prepare(`INSERT OR IGNORE INTO telegram_outbox(event_id,source_id,strategy_id,event_type,action,message,status,created_at,next_attempt)
    VALUES(?,?,?,?,? ,?,'pending',?,?)`).bind(`${kind}:${row.event_id}:${messageId}`,row.source_id,row.strategy_id,kind,'delete',String(messageId),now,now);
 }
+// V29.2: corpo compacto enviado antes da figurinha, sem anunciar resultado inventado.
+export function telegramVisibleResultText(row){
+ const kind=String(row?.event_type||'');
+ const message=String(row?.message||'');
+ if(kind==='red')return '❌ RED';
+ const match=message.match(/Pedra sorteada \(([⚪🔴⚫]\d{1,2})\)\s*$/u);
+ return match?'✅ WIN — '+match[1]:'✅ WIN';
+}
+
 async function dispatchOne(env,row,now){
  const db=env.DB,claim=await db.prepare(`UPDATE telegram_outbox SET status='sending',attempts=attempts+1,next_attempt=?
   WHERE queue_id=? AND ((status IN ('pending','retry') AND next_attempt<=?) OR (status='sending' AND next_attempt<=?))`).bind(now+100,row.queue_id,now,now).run();
@@ -171,15 +180,48 @@ async function dispatchOne(env,row,now){
     const chat=settings.signalDestination&&settings.destinations.some(x=>x.id===settings.signalDestination)?settings.signalDestination:env.TELEGRAM_CHAT_ID;
    const {main,stone}=splitResultText(row.event_type,row.message);
    const text=capped(row.message);
+    // V29.2: um evento de texto independente impede que falha na figurinha oculte WIN/RED.
+    const resultMedia=settings.resultTextWithSticker===true&&
+      ['win','winWhite','red'].includes(row.event_type)&&
+      ['sticker','animation'].includes(media.type);
+    let separateResultText=false;
+    if(resultMedia){
+     const textId=row.event_id+':visible-text-v29.2';
+     let paired=await db.prepare('SELECT * FROM telegram_outbox WHERE event_id=?').bind(textId).first();
+     if(!paired){
+      await db.prepare(`INSERT OR IGNORE INTO telegram_outbox
+       (event_id,source_id,strategy_id,event_type,action,message,status,created_at,next_attempt)
+       VALUES(?,?,?,?,?,?,'pending',?,?)`)
+       .bind(textId,row.source_id,row.strategy_id,'resultText','send',telegramVisibleResultText(row),now,now).run();
+      paired=await db.prepare('SELECT * FROM telegram_outbox WHERE event_id=?').bind(textId).first();
+     }
+     if(paired?.status!=='sent'&&['pending','retry','sending'].includes(paired?.status)&&Number(paired.next_attempt||0)<=now){
+      // Entrega o texto primeiro, via a mesma fila idempotente, antes da imagem.
+      await dispatchOne(env,paired,now);
+      paired=await db.prepare('SELECT * FROM telegram_outbox WHERE event_id=?').bind(textId).first();
+      if(paired?.status==='sent')await wait(1050);
+     }
+     if(paired?.status!=='sent'){
+      await db.prepare("UPDATE telegram_outbox SET status='retry',next_attempt=?,last_error=? WHERE queue_id=?")
+       .bind(now+15,'Aguardando texto do resultado',row.queue_id).run();
+      return true;
+     }
+     separateResultText=true;
+    }
    let messageId=Number(row.telegram_message_id||0);
    if(media.type==='animation'){
     if(!messageId){
-     const captionText=stone?main:text;
+     const captionText=separateResultText?'':(stone?main:text);
      const caption=captionText.length>1024?(captionText.slice(0,880)+'\n…\n'+captionText.slice(-130)):captionText;
      let result;
       try{result=await botCall(env,'sendAnimation',{chat_id:chat,animation:media.fileId,...(caption?{caption}:{})});}
       catch(error){
        if(['win','winWhite','red'].includes(row.event_type)&&String(error?.message||'').includes('Telegram HTTP 400')){
+         if(separateResultText){
+          await db.prepare("UPDATE telegram_outbox SET status='failed',last_error=? WHERE queue_id=?")
+           .bind('Midia invalida; resultado ja entregue em texto',row.queue_id).run();
+          return true;
+         }
         result=await botCall(env,'sendMessage',{chat_id:chat,text:main||text,link_preview_options:{is_disabled:true}});
         usedTextFallback=true;
        }else throw error;
@@ -188,13 +230,18 @@ async function dispatchOne(env,row,now){
      if(!messageId)throw Error('Telegram não confirmou o GIF');
      await db.prepare('UPDATE telegram_outbox SET telegram_message_id=? WHERE queue_id=?').bind(messageId,row.queue_id).run();
     }
-    if(stone)await botCall(env,'sendMessage',{chat_id:chat,text:stone,link_preview_options:{is_disabled:true}});
+    if(stone&&!separateResultText)await botCall(env,'sendMessage',{chat_id:chat,text:stone,link_preview_options:{is_disabled:true}});
    }else if(media.type==='sticker'){
     if(!messageId){
      let result;
       try{result=await botCall(env,'sendSticker',{chat_id:chat,sticker:media.fileId});}
       catch(error){
        if(['win','winWhite','red'].includes(row.event_type)&&String(error?.message||'').includes('Telegram HTTP 400')){
+         if(separateResultText){
+          await db.prepare("UPDATE telegram_outbox SET status='failed',last_error=? WHERE queue_id=?")
+           .bind('Midia invalida; resultado ja entregue em texto',row.queue_id).run();
+          return true;
+         }
         // Se o sticker ficou inválido, não perder o WIN/RED: envia texto visível.
         result=await botCall(env,'sendMessage',{chat_id:chat,text:main||text,link_preview_options:{is_disabled:true}});
         usedTextFallback=true;
@@ -205,9 +252,9 @@ async function dispatchOne(env,row,now){
      // Salvar o ID antes de qualquer mensagem adicional protege a figurinha de reenvio.
      await db.prepare('UPDATE telegram_outbox SET telegram_message_id=? WHERE queue_id=?').bind(messageId,row.queue_id).run();
     }
-    if((settings.textWithSticker||settings.resultTextWithSticker&&['win','winWhite','red'].includes(row.event_type))&&main&&!usedTextFallback&&!Number(row.telegram_message_id||0))
+    if(!separateResultText&&(settings.textWithSticker||settings.resultTextWithSticker&&['win','winWhite','red'].includes(row.event_type))&&main&&!usedTextFallback&&!Number(row.telegram_message_id||0))
        await botCall(env,'sendMessage',{chat_id:chat,text:main,link_preview_options:{is_disabled:true}});
-    if(stone)await botCall(env,'sendMessage',{chat_id:chat,text:stone,link_preview_options:{is_disabled:true}});
+    if(stone&&!separateResultText)await botCall(env,'sendMessage',{chat_id:chat,text:stone,link_preview_options:{is_disabled:true}});
    }else{
     if(!messageId){
      const result=await botCall(env,'sendMessage',{chat_id:chat,text:stone?main:text,link_preview_options:{is_disabled:true}});
@@ -261,9 +308,9 @@ export async function flushTelegram(env,max=4){
  for(let i=0;i<max;i++){
   const now=stamp();
   // Pedras antigas nao podem gerar mensagem nova fora de contexto.
-  await env.DB.prepare(`UPDATE telegram_outbox SET status='expired',last_error='Evento antigo' WHERE status IN ('pending','retry','sending') AND action='send' AND event_type NOT IN ('win','winWhite','red') AND created_at<?`).bind(now-180).run();
+  await env.DB.prepare(`UPDATE telegram_outbox SET status='expired',last_error='Evento antigo' WHERE status IN ('pending','retry','sending') AND action='send' AND event_type NOT IN ('win','winWhite','red') AND event_type!='resultText' AND created_at<?`).bind(now-180).run();
   // Ordem rigorosa: nunca enviar entrada antes do pre-aviso pendente em nova tentativa.
-  const row=await env.DB.prepare(`SELECT * FROM telegram_outbox WHERE status IN ('pending','retry','sending') AND next_attempt<=? ${automatic?'':"AND event_type IN ('activation','win','winWhite','red','delete_gale','delete_prealert')"} ORDER BY CASE WHEN event_type IN ('delete_prealert','delete_gale') THEN 0 WHEN event_type='activation' THEN 1 ELSE 2 END,queue_id LIMIT 1`).bind(now).first();
+  const row=await env.DB.prepare(`SELECT * FROM telegram_outbox WHERE status IN ('pending','retry','sending') AND next_attempt<=? ${automatic?'':"AND event_type IN ('activation','win','winWhite','red','resultText','delete_gale','delete_prealert')"} ORDER BY CASE WHEN event_type IN ('delete_prealert','delete_gale') THEN 0 WHEN event_type='activation' THEN 1 ELSE 2 END,queue_id LIMIT 1`).bind(now).first();
   if(!row)break;
   if(await dispatchOne(env,row,now))processed++;else break;
   if(i+1<max)await wait(1050); // Evita excesso de mensagens por segundo no mesmo chat.
