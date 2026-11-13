@@ -1,3 +1,38 @@
+
+// V24: navegação visual modular. Não modifica o motor nem os endpoints.
+const NEXO_AREAS=[
+ {id:'overview',label:'Visão geral',icon:'◈',panels:['sourcePanel','eventsPanel']},
+ {id:'strategies',label:'Estratégias',icon:'◆',panels:['stoneEditor','rulesPanel','simulationPanel']},
+ {id:'messages',label:'Mensagens e mídias',icon:'✉',panels:['telegramPanel']},
+ {id:'telegram',label:'Grupos Telegram',icon:'◉',panels:['destinationsPanel']},
+ {id:'score',label:'Placares',icon:'▥',panels:['scoreboardPanel']},
+ {id:'referral',label:'Indicação',icon:'↗',panels:['referralPanel']},
+ {id:'settings',label:'Configurações',icon:'⚙',panels:['controlsPanel']}
+];
+function nexoTotalScore(){
+ const scores=serverState?.score||[];
+ const sum=k=>scores.reduce((n,x)=>n+Number(x[k]||0),0);
+ const wins=sum('wins'),reds=sum('reds'),total=wins+reds;
+ return `📊 NEXO · PLACAR GERAL\nEstratégias: ${(serverState?.strategies||[]).length}\n✅ GREEN: ${wins}\n⚪ GREEN BRANCO: ${sum('white_wins')}\n❌ RED: ${reds}\n↗ GALE 1: ${sum('gale1')}\n↗ GALE 2: ${sum('gale2')}\n🎯 Acerto: ${total?(100*wins/total).toFixed(1):'0.0'}%\nOperações encerradas: ${total}`;
+}
+function nexoOpenArea(area){
+ const chosen=NEXO_AREAS.find(x=>x.id===area)||NEXO_AREAS[0];
+ for(const x of NEXO_AREAS)for(const id of x.panels){const el=document.getElementById(id);if(el)el.hidden=!chosen.panels.includes(id);}
+ for(const btn of document.querySelectorAll('[data-nexo-area]')){
+  const active=btn.dataset.nexoArea===chosen.id;btn.classList.toggle('active',active);btn.setAttribute('aria-selected',String(active));
+ }
+ const hint=document.getElementById('nexoTabHint');if(hint)hint.textContent=chosen.label+' · configurações e registros preservados no D1';
+ const score=document.getElementById('nexoTotalScore');if(score&&chosen.id==='score')score.textContent=nexoTotalScore();
+ try{localStorage.setItem('nexo-v24-area',chosen.id)}catch{}
+}
+function nexoSetupAreas(){
+ const nav=document.getElementById('nexoTabs');if(!nav)return;
+ for(const x of NEXO_AREAS){const b=document.createElement('button');b.type='button';b.className='nexo-tab';b.dataset.nexoArea=x.id;b.textContent=x.icon+' '+x.label;b.onclick=()=>nexoOpenArea(x.id);nav.append(b);}
+ document.getElementById('nexoCopyTotal')?.addEventListener('click',async()=>{const txt=nexoTotalScore();try{await navigator.clipboard.writeText(txt);document.getElementById('nexoTotalScore').textContent=txt+'\n\n✓ Copiado';}catch{document.getElementById('nexoTotalScore').textContent=txt;}});
+ let chosen='overview';try{chosen=localStorage.getItem('nexo-v24-area')||chosen}catch{}
+ nexoOpenArea(chosen);
+}
+
 // NEXO_V18_MARKER: galeria de stickers e coringa no editor
 const $=id=>document.getElementById(id);
 const PREFS_KEY='nexo-historicos-v7-prefs';
@@ -321,9 +356,9 @@ function initHandlers(){
  $('simulate').onclick=()=>safe(async()=>{const values=$('demoRounds').value.split(',').map(x=>x.trim()).filter(Boolean).map(Number);if(!values.length)throw Error('Insira números separados por vírgulas');const result=await send('/api/strategies/demo','POST',{rule:validClient(editorRule()),rounds:values,templates:serverState?.settings?.templates});$('demoOutput').textContent=result.events.length?result.events.map(e=>`${e.type.toUpperCase()}: ${e.message||'Limpeza do aviso'}`).join('\n\n'):'Nenhum padrão identificado nesta sequência.';},'editorMsg');
  renderBuilder();
 }
-async function init(){initHandlers();await loadCatalog();try{const a=await api('/api/admin/whoami');if(a.authenticated){$('loginPanel').classList.add('hidden');$('secureApp').classList.remove('hidden');await loadState(true);await loadTelegram();await readBalls();void requestTick();}else showLogin(a.configured?'':'Painel desativado: configure ADMIN_TOKEN no Worker (mínimo 16 caracteres).');}catch(e){showLogin(e.message);}
+async function init(){nexoSetupAreas();initHandlers();await loadCatalog();try{const a=await api('/api/admin/whoami');if(a.authenticated){$('loginPanel').classList.add('hidden');$('secureApp').classList.remove('hidden');await loadState(true);await loadTelegram();await readBalls();void requestTick();}else showLogin(a.configured?'':'Painel desativado: configure ADMIN_TOKEN no Worker (mínimo 16 caracteres).');}catch(e){showLogin(e.message);}
  // A tela verifica o D1 a cada 5s; a fonte pública permanece limitada à sua frequência real.
- setInterval(()=>{if(!document.hidden&&serverState&&!busy){busy=true;Promise.allSettled([readEvents(),readBalls()]).finally(()=>busy=false);}},5000);
+ setInterval(()=>{if(!document.hidden&&serverState&&!busy){busy=true;Promise.allSettled([readEvents(),readBalls()]).finally(()=>busy=false);}},2000);
  setInterval(()=>{if(!document.hidden&&serverState)void requestTick();},5000);
 }
 await init();
