@@ -109,7 +109,7 @@ test('V11: interface reúne texto e mídia por evento e não exibe segredo',()=>
  const html=readFileSync(new URL('../public/estrategias.html',import.meta.url),'utf8');
  const script=readFileSync(new URL('../public/estrategias.js',import.meta.url),'utf8');
  assert.match(html,/id="telegramPanel"/);assert.match(html,/id="templates"/);
- assert.match(script,/Puxar do Telegram/);assert.match(script,/telegram-event-card/);assert.match(script,/activation/);
+ assert.match(script,/Biblioteca visual do Telegram/);assert.match(script,/telegram-event-card/);assert.match(script,/activation/);
  assert.ok(!html.includes(TOKEN));assert.ok(!script.includes(TOKEN));
 });
 

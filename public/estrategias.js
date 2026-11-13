@@ -107,20 +107,27 @@ function drawTemplates(){
   text.value=models[type]??defaultTemplates[type]??'';text.maxLength=type==='brand'?150:1000;text.rows=type==='entry'||type==='prealert'?3:2;
   label.append(text);card.append(label);
   if(mediaTypes.includes(type)){
-   const row=document.createElement('div');row.className='telegram-media-fields';
+   const row=document.createElement('div');row.className='telegram-media-fields nexo-v21-fields';
    const typeLabel=document.createElement('label');typeLabel.textContent='Formato de envio';
    const select=document.createElement('select');select.id='tg-media-type-'+type;
-   for(const [value,title] of [['none','Só texto'],['animation','GIF / Animação com legenda'],['sticker','Sticker (texto opcional no painel)']]){
+   for(const [value,title] of [['none','📝 Somente texto'],['sticker','🎨 Sticker do Telegram'],['animation','🎞️ GIF do Telegram']]){
     const option=document.createElement('option');option.value=value;option.textContent=title;select.append(option);
    }
    select.value=savedMedia[type]?.type||'none';typeLabel.append(select);
-   const idLabel=document.createElement('label');idLabel.textContent='FILE_ID do Telegram';
-   const idInput=document.createElement('input');idInput.id='tg-file-id-'+type;idInput.autocomplete='off';idInput.placeholder='Cole ou escolha com Puxar do Telegram';idInput.value=savedMedia[type]?.fileId||'';idLabel.append(idInput);
-   const pull=document.createElement('button');pull.type='button';pull.className='outline';pull.textContent='↧ Puxar do Telegram';
-   pull.onclick=()=>safe(()=>pullTelegramMedia(type),'templateMsg');
-   const found=document.createElement('select');found.id='tg-found-'+type;found.className='hidden';
-   found.onchange=()=>{const choice=telegramMediaCache[Number(found.value)];if(!choice)return;select.value=choice.type;idInput.value=choice.fileId;};
-   row.append(typeLabel,idLabel,pull,found);card.append(row);
+   const hidden=document.createElement('input');hidden.type='hidden';hidden.id='tg-file-id-'+type;
+   hidden.value=savedMedia[type]?.fileId||'';
+   const preview=document.createElement('div');preview.id='tg-preview-'+type;preview.className='nexo-v21-selection';
+   const choose=document.createElement('button');choose.type='button';choose.className='outline';
+   choose.textContent='🖼️ Escolher na biblioteca do Telegram';
+   choose.onclick=()=>{document.getElementById('nexoStickerGallery')?.scrollIntoView({behavior:'smooth',block:'start'});setGalleryEvent(type);};
+   select.onchange=()=>{
+    if(select.value==='none'){hidden.value='';renderMediaSelection(type);return;}
+    if(hidden.value && savedMedia[type]?.type!==select.value)hidden.value='';
+    renderMediaSelection(type);
+    if(!hidden.value)flash('Escolha um '+(select.value==='sticker'?'sticker':'GIF')+' na biblioteca visual.','templateMsg');
+   };
+   row.append(typeLabel,hidden,preview,choose);card.append(row);
+   queueMicrotask(()=>renderMediaSelection(type));
   }
   if(type==='activation'){
    const p=document.createElement('p');p.className='muted';p.textContent='Envia uma vez ao ativar o robô com o Telegram habilitado. Atenção: o ID inicial desta figurinha é igual ao do WIN. Você pode substituí-lo aqui.';card.append(p);
@@ -133,49 +140,70 @@ function drawTemplates(){
  }
 }
 let telegramSettingsCache=null,telegramMediaCache=[];
-async function pullTelegramMedia(type){
- const response=await api('/api/telegram/media');telegramMediaCache=response.items||[];
- const chosen=$('tg-found-'+type);chosen.textContent='';
- const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Selecione um GIF ou Sticker recebido';chosen.append(placeholder);
- telegramMediaCache.forEach((m,i)=>{const opt=document.createElement('option');opt.value=String(i);opt.textContent=m.label;chosen.append(opt);});
- chosen.classList.toggle('hidden',!telegramMediaCache.length);
- flash(telegramMediaCache.length?'Escolha a mídia na lista do evento.':response.notice,'templateMsg',!!telegramMediaCache.length);
+function mediaPreviewUrl(fileId){return '/api/telegram/media/preview?file_id='+encodeURIComponent(fileId)}
+function renderMediaSelection(type){
+ const target=$('tg-preview-'+type),select=$('tg-media-type-'+type),id=$('tg-file-id-'+type);
+ if(!target||!select||!id)return;
+ target.replaceChildren();
+ if(select.value==='none'){
+  const text=document.createElement('span');text.textContent='Somente texto — nenhuma mídia selecionada.';target.append(text);return;
+ }
+ if(!id.value){const text=document.createElement('span');text.textContent='Nenhuma mídia escolhida. Use a biblioteca acima.';target.append(text);return;}
+ const img=document.createElement('img');img.alt='Prévia da mídia escolhida';img.loading='lazy';img.src=mediaPreviewUrl(id.value);
+ img.onerror=()=>{img.remove();const warning=document.createElement('span');warning.textContent='Prévia indisponível. Você pode escolher outra mídia na biblioteca.';target.prepend(warning)};
+ const label=document.createElement('span');label.textContent=(select.value==='sticker'?'Sticker':'GIF')+' selecionado';
+ const remove=document.createElement('button');remove.type='button';remove.className='outline';remove.textContent='Remover';
+ remove.onclick=()=>{id.value='';select.value='none';renderMediaSelection(type)};
+ target.append(img,label,remove);
 }
-
-// Galeria visual; escolhe evento, depois salva com os controles existentes.
+function setGalleryEvent(type){const choice=$('nexo-v21-event');if(choice)choice.value=type;}
 function setupStickerGallery(){
  const target=$('templates');if(!target||$('nexoStickerGallery'))return;
  const box=document.createElement('section');box.id='nexoStickerGallery';box.className='nexo-sticker-gallery';
- const title=document.createElement('h3');title.textContent='Biblioteca visual de stickers e GIFs';
- const note=document.createElement('p');note.className='muted';
- note.textContent='Envie os stickers ao privado do bot. Escolha o evento e clique em Salvar textos e midias.';
- const btn=document.createElement('button');btn.className='outline';btn.type='button';btn.textContent='Buscar stickers enviados ao bot';
+ const title=document.createElement('h3');title.textContent='🖼️ Biblioteca visual do Telegram';
+ const note=document.createElement('p');note.className='muted';note.textContent='Envie stickers ou GIFs ao privado do bot, busque aqui, escolha o evento e salve. Não é necessário copiar FILE_ID.';
+ const eventLabel=document.createElement('label');eventLabel.textContent='Evento que receberá a mídia';
+ const events=document.createElement('select');events.id='nexo-v21-event';
+ for(const type of mediaTypes){const option=document.createElement('option');option.value=type;option.textContent=labels[type]||type;events.append(option)}
+ eventLabel.append(events);
+ const btn=document.createElement('button');btn.className='outline';btn.type='button';btn.textContent='↻ Buscar stickers e GIFs do bot';
  const items=document.createElement('div');items.className='nexo-sticker-results';
+ const status=document.createElement('p');status.className='muted';status.textContent='Nenhuma busca realizada.';
  btn.onclick=()=>safe(async()=>{
-  const data=await api('/api/telegram/media');telegramMediaCache=data.items||[];items.replaceChildren();
-  if(!telegramMediaCache.length){const p=document.createElement('p');p.textContent=data.notice||'Nenhuma midia recente';items.append(p);return;}
-  for(const media of telegramMediaCache){
-   const card=document.createElement('div');card.className='nexo-sticker-card';
-   const img=document.createElement('img');img.alt=media.label||'Sticker';img.loading='lazy';
-   img.src='/api/telegram/media/preview?file_id='+encodeURIComponent(media.previewFileId||media.fileId);
-   img.onerror=()=>{img.style.display='none'};
-   const caption=document.createElement('small');caption.textContent=media.label||media.type;
-   const events=document.createElement('select');
-   for(const type of mediaTypes){const o=document.createElement('option');o.value=type;o.textContent=labels[type]||type;events.append(o)}
-   const use=document.createElement('button');use.type='button';use.className='outline';use.textContent='Usar neste evento';
-   use.onclick=()=>{$('tg-media-type-'+events.value).value=media.type;$('tg-file-id-'+events.value).value=media.fileId;
-    flash('Mídia associada a '+(labels[events.value]||events.value)+'. Agora salve textos e mídias.','templateMsg',true)};
-   card.append(img,caption,events,use);items.append(card);
-  }
+  btn.disabled=true;items.replaceChildren();status.textContent='Buscando mídias recentes do bot...';
+  try{
+   const data=await api('/api/telegram/media');telegramMediaCache=data.items||[];
+   status.textContent=telegramMediaCache.length?telegramMediaCache.length+' mídia(s) encontrada(s). Toque em Usar neste evento.':(data.notice||'Nenhuma mídia recente encontrada. Envie uma ao privado do bot e tente novamente.');
+   for(const media of telegramMediaCache){
+    const card=document.createElement('div');card.className='nexo-sticker-card';
+    const img=document.createElement('img');img.alt=media.label||'Mídia Telegram';img.loading='lazy';
+    img.src=mediaPreviewUrl(media.previewFileId||media.fileId);
+    img.onerror=()=>{img.replaceWith(document.createTextNode('Prévia indisponível'))};
+    const caption=document.createElement('small');caption.textContent=media.label||media.type;
+    const use=document.createElement('button');use.type='button';use.className='outline';use.textContent='Usar neste evento';
+    use.onclick=()=>{
+     const type=events.value;
+     $('tg-media-type-'+type).value=media.type;
+     $('tg-file-id-'+type).value=media.fileId;
+     renderMediaSelection(type);
+     status.textContent='Mídia escolhida para '+(labels[type]||type)+'. Clique em Salvar textos e mídias para confirmar.';
+     $('tg-preview-'+type)?.scrollIntoView({behavior:'smooth',block:'center'});
+    };
+    card.append(img,caption,use);items.append(card);
+   }
+  }finally{btn.disabled=false}
  },'templateMsg');
- box.append(title,note,btn,items);target.parentElement.insertBefore(box,target);
+ box.append(title,note,eventLabel,btn,status,items);target.parentElement.insertBefore(box,target);
  const css=document.createElement('style');css.textContent=`
  .stone-any .stone-circle{background:linear-gradient(145deg,#54b8ff,#0066e8)!important;border-color:#9ee9ff!important;color:white!important}
- .nexo-sticker-gallery{border:1px solid #244565;background:#0b172a;border-radius:16px;padding:16px;margin:16px 0}
+ .nexo-sticker-gallery{border:1px solid #244565;background:#0b172a;border-radius:16px;padding:16px;margin:16px 0;scroll-margin-top:30px}
+ .nexo-sticker-gallery>label{display:block;max-width:500px;margin:12px 0}
  .nexo-sticker-results{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:14px}
  .nexo-sticker-card{background:#12233b;border:1px solid #2f4c68;border-radius:14px;display:flex;flex-direction:column;gap:8px;padding:10px;min-width:0}
- .nexo-sticker-card img{width:100%;height:105px;object-fit:contain;background:#182b42;border-radius:10px}
- .nexo-sticker-card select,.nexo-sticker-card button{width:100%;min-width:0}
+ .nexo-sticker-card img{width:100%;height:120px;object-fit:contain;background:#182b42;border-radius:10px}
+ .nexo-sticker-card button{width:100%;min-width:0}
+ .nexo-v21-selection{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0;color:#b7cbe2}
+ .nexo-v21-selection img{height:88px;max-width:140px;object-fit:contain;border:1px solid #31516d;border-radius:12px;background:#172b42}
  `;document.head.append(css);
 }
 
