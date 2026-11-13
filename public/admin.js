@@ -47,3 +47,62 @@ try{
  if(me.authenticated){showAdmin(true);await loadSources();}
  else if(!me.configured)$('loginMsg').textContent='Admin desativado: defina o segredo ADMIN_TOKEN (senha forte de 16 caracteres ou mais) no Worker da Cloudflare.';
 }catch(e){$('loginMsg').textContent=e.message;}
+
+// V29: controles ADM existentes; nunca expõe token nem senha.
+let v29={strategy:null,telegram:null,diag:null};
+const setV29Message=msg=>{$('v29Message').textContent=String(msg||'');};
+async function loadV29(){
+ try{
+  const [st,tg,diag]=await Promise.all([call('/api/strategies/state'),call('/api/telegram/status'),call('/api/strategies/diagnostics')]);
+  v29={strategy:st,telegram:tg,diag};
+  const config=tg.settings||{},s=st.settings||{},dest=$('v29Destination');
+  dest.replaceChildren();
+  const entries=[{id:'',name:'Destino principal configurado no Worker'},...(config.destinations||[])];
+  for(const d of entries){const opt=document.createElement('option');opt.value=d.id;opt.textContent=d.name;dest.append(opt);}
+  dest.value=config.signalDestination||'';
+  $('v29WinText').checked=config.resultTextWithSticker===true;
+  $('v29ResetMode').value=s.scoreResetMode==='manual'?'manual':'daily';
+  $('v29Running').textContent=s.automatic?'Pausar novos sinais':'Iniciar novos sinais';
+  $('v29Telegram').textContent=config.enabled?'Pausar envio Telegram':'Ativar envio Telegram';
+  const wins=(st.score||[]).reduce((n,x)=>n+Number(x.wins||0),0),reds=(st.score||[]).reduce((n,x)=>n+Number(x.reds||0),0);
+  const send=(tg.recent||[]).filter(x=>['win','winWhite','red'].includes(x.event_type)).slice(0,5).map(x=>`${x.event_type}: ${x.status}${x.last_error?' / '+x.last_error:''}`).join('\n')||'Sem resultados recentes';
+  const warns=(diag.warnings||[]).join(', ')||'Nenhum aviso';
+  $('v29Status').textContent=`Monitor: ${s.automatic?'ATIVO':'PAUSADO'} | Telegram: ${config.enabled?'ATIVO':'PAUSADO'}\nColeta: ${diag.collection?.last_new??'-'} novas | Cursor: ${diag.cursor?.age_seconds??'-'}s\nAvisos: ${warns}\nPlacar atual: ${wins} WIN / ${reds} RED\nFila recente:\n${send}`;
+  setV29Message('Diagnóstico atualizado. Sinais automáticos disponíveis apenas para Smash Double.');
+ }catch(e){setV29Message('Falha ao carregar: '+e.message);}
+}
+async function v29Action(fn){
+ try{setV29Message('Aplicando...');await fn();await loadV29();}
+ catch(e){setV29Message('Erro: '+e.message);}
+}
+$('v29Refresh').addEventListener('click',()=>loadV29());
+$('v29Running').addEventListener('click',()=>v29Action(async()=>{
+ const active=v29.strategy?.settings?.automatic===true;
+ await call('/api/strategies/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({automatic:!active})});
+}));
+$('v29Telegram').addEventListener('click',()=>v29Action(async()=>{
+ const active=v29.telegram?.settings?.enabled===true;
+ await call('/api/telegram/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!active})});
+}));
+$('v29SaveDest').addEventListener('click',()=>v29Action(async()=>{
+ await call('/api/telegram/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({signalDestination:$('v29Destination').value})});
+}));
+$('v29SaveText').addEventListener('click',()=>v29Action(async()=>{
+ await call('/api/telegram/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({resultTextWithSticker:$('v29WinText').checked})});
+}));
+$('v29TestDest').addEventListener('click',()=>v29Action(async()=>{
+ const r=await call('/api/telegram/test-signal-destination',{method:'POST'});
+ if(!r.ok)throw Error('Telegram não confirmou o teste');
+}));
+$('v29SaveResetMode').addEventListener('click',()=>v29Action(async()=>{
+ await call('/api/strategies/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({scoreResetMode:$('v29ResetMode').value})});
+}));
+$('v29ResetNow').addEventListener('click',()=>{
+ if(!confirm('Zerar os contadores WIN/RED agora? O histórico será mantido.'))return;
+ v29Action(async()=>{await call('/api/strategies/score/reset',{method:'POST'});});
+});
+// O painel chama a consulta apenas quando houver sessão ADM autenticada.
+const oldShowAdmin=showAdmin;
+showAdmin=function(yes){oldShowAdmin(yes);if(yes)loadV29();};
+if(!$('auth').classList.contains('hidden')){ /* aguarda login */ }
+else loadV29();

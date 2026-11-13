@@ -11,7 +11,33 @@
 <div class="admin-shell"><div class="admin-head"><div><p class="eyebrow">ÁREA PROTEGIDA</p><h1 style="font-size:clamp(26px,4vw,42px);margin:4px 0">NEXO Históricos · Admin</h1><p class="muted">Fontes, diagnósticos e estratégias persistidas no D1.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="outline" href="/">← Histórico</a><a class="outline" href="/estrategias/smash/double">◎ Estratégias</a></div></div>
 <section id="auth" class="panel admin-login"><h2>Entrar no painel</h2><p class="muted">A senha fica em um segredo do Worker. Nunca coloque a senha no GitHub ou no HTML.</p><form id="loginForm"><label for="password">Senha administrativa</label><input id="password" type="password" autocomplete="current-password" minlength="16" required><button class="primary" type="submit">Entrar</button></form><p class="admin-msg" id="loginMsg"></p></section>
 <div id="privatePanel" class="hidden"><div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:16px"><button class="outline" id="reload" type="button">↻ Atualizar fontes</button><button class="outline" id="logout" type="button">Sair</button></div>
-<div class="admin-grid"><section class="panel"><span class="kicker">01 / CONEXÕES</span><h2>Fontes públicas</h2><p class="muted">Ligue ou pause somente as fontes com leitura disponível. As plataformas não listadas aqui permanecem no catálogo em validação.</p><div class="admin-scroll"><table class="admin-table"><thead><tr><th>Plataforma / jogo</th><th>Situação</th><th>Última leitura</th><th>Ação</th></tr></thead><tbody id="sources"></tbody></table></div><p class="admin-msg" id="sourceMsg"></p></section>
+<div class="admin-grid"><section class="panel" id="nexoV29Panel" style="grid-column:1/-1">
+ <span class="kicker">04 / MOTOR V29</span><h2>Central de sinais e placar</h2>
+ <p class="admin-sub">A Cloudflare processa o Smash Double; o Termux é apenas auxiliar. Os controles abaixo exigem sessão ADM.</p>
+ <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0">
+  <button class="primary" id="v29Refresh" type="button">Atualizar diagnóstico</button>
+  <button id="v29Running" type="button">Pausar/iniciar sinais</button>
+  <button id="v29Telegram" type="button">Pausar/iniciar Telegram</button>
+ </div>
+ <pre id="v29Status" class="preview" style="white-space:pre-wrap;min-height:80px">Carregando diagnóstico...</pre>
+ <div class="pattern-controls">
+  <label for="v29Destination">Destino dos sinais automáticos</label>
+  <select id="v29Destination" style="max-width:100%;width:100%;padding:12px;background:#14243b;color:#fff;border:1px solid #33445e;border-radius:9px"></select>
+  <button id="v29SaveDest" type="button">Salvar destino</button>
+  <button id="v29TestDest" type="button">Enviar teste ao destino</button>
+  <label><input type="checkbox" id="v29WinText" style="width:auto"> WIN/RED em texto também (além da mídia)</label>
+  <button id="v29SaveText" type="button">Salvar apresentação do WIN</button>
+  <label for="v29ResetMode">Zerar placar</label>
+  <select id="v29ResetMode" style="max-width:100%;width:100%;padding:12px;background:#14243b;color:#fff;border:1px solid #33445e;border-radius:9px">
+   <option value="daily">Automaticamente à meia-noite (São Paulo)</option>
+   <option value="manual">Apenas quando ADM solicitar</option>
+  </select>
+  <button id="v29SaveResetMode" type="button">Salvar modo do placar</button>
+  <button id="v29ResetNow" type="button">Zerar placar agora (sem apagar histórico)</button>
+ </div>
+ <p id="v29Message" class="admin-msg"></p>
+</section>
+<section class="panel" style="grid-column:1/-1"><span class="kicker">01 / CONEXÕES</span><h2>Fontes públicas</h2><p class="muted">Ligue ou pause somente as fontes com leitura disponível. As plataformas não listadas aqui permanecem no catálogo em validação.</p><div class="admin-scroll"><table class="admin-table"><thead><tr><th>Plataforma / jogo</th><th>Situação</th><th>Última leitura</th><th>Ação</th></tr></thead><tbody id="sources"></tbody></table></div><p class="admin-msg" id="sourceMsg"></p></section>
 <section class="panel"><span class="kicker">02 / ESTRATÉGIAS</span><h2>Estratégias Smash Double</h2><p class="muted">A montagem e o monitoramento real estão disponíveis na <a href="/estrategias/smash/double">aba Estratégias Smash Double</a>. Os exemplos abaixo continuam como prévia; nenhum bot do Telegram foi conectado.</p><div class="pattern-controls"><label for="pattern">Padrão de demonstração</label><input id="pattern" value="1,4,4" maxlength="32" pattern="[0-9 ,]+"><label for="target">Entrada desejada no modelo</label><input id="target" value="PRETO ⚫ E BRANCO ⚪" maxlength="80"></div><p class="admin-sub">Pré-aviso após identificar os dois primeiros elementos; confirmação somente se o terceiro aparecer. Um novo resultado diferente cancela o pré-aviso na lógica proposta para o futuro.</p></section>
 <section class="panel"><span class="kicker">03 / MENSAGENS</span><h2>Prévia do modelo</h2><h3 style="font-size:15px">Pré-aviso</h3><pre id="preAlert" class="preview"></pre><h3 style="font-size:15px">Após a sequência completa</h3><pre id="entryAlert" class="preview"></pre><p class="muted">Históricos não tornam previsível a próxima rodada. O modelo é apenas um rascunho para avaliação futura.</p></section>
 </div></div>

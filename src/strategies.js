@@ -1,4 +1,5 @@
 import {authorized,sameOrigin} from './admin.js';
+import {scoreCutoff} from './scoreboard.js';
 import {validateRule,evolve,eventMessage,PRESET_MESSAGES,COLOR} from './strategyCore.js';
 import {getTelegramSettings,telegramQueueStatement,flushTelegram,telegramActivationStatement} from './telegram.js';
 
@@ -7,7 +8,7 @@ const json=(value,status=200)=>new Response(JSON.stringify(value),{status,header
 const SMASH='historicosblaze:smash:double';
 const stamp=()=>Math.floor(Date.now()/1000);
 const parseJSON=x=>{try{return JSON.parse(x)}catch{return null}};
-const DEFAULT_SETTINGS={automatic:false,prealert:true,entry:true,fireworks:true,templates:PRESET_MESSAGES};
+const DEFAULT_SETTINGS={automatic:false,prealert:true,entry:true,fireworks:true,scoreResetMode:'daily',scoreResetAt:0,templates:PRESET_MESSAGES};
 const allowedTemplateKeys=new Set(Object.keys(PRESET_MESSAGES));
 export async function getSettings(db){
  const row=await db.prepare('SELECT config_json FROM strategy_settings WHERE source_id=?').bind(SMASH).first();
@@ -24,8 +25,9 @@ function parseRule(row){return {...validateRule({...parseJSON(row.definition),en
 function validSource(url){return (url.searchParams.get('platform')||'smash')==='smash'&&(url.searchParams.get('game')||'double')==='double';}
 async function loadRules(db){const r=await db.prepare('SELECT * FROM strategies WHERE platform=? AND game=? ORDER BY created_at DESC,id DESC').bind('smash','double').all();return r.results.map(parseRule);}
 async function loadState(db){
- const [strategies,settings,events,score]=await Promise.all([
-  loadRules(db),getSettings(db),db.prepare('SELECT rowid AS seq,* FROM strategy_events WHERE source_id=? ORDER BY rowid DESC LIMIT 100').bind(SMASH).all(),
+ const settings=await getSettings(db),cutoff=scoreCutoff(settings);
+ const [strategies,events,score]=await Promise.all([
+  loadRules(db),db.prepare('SELECT rowid AS seq,* FROM strategy_events WHERE source_id=? ORDER BY rowid DESC LIMIT 100').bind(SMASH).all(),
   db.prepare(`SELECT strategy_id,
     SUM(CASE WHEN event_type='entry' THEN 1 ELSE 0 END) AS entries,
     SUM(CASE WHEN event_type='win' THEN 1 ELSE 0 END) AS wins,
@@ -33,9 +35,9 @@ async function loadState(db){
     SUM(CASE WHEN event_type='red' THEN 1 ELSE 0 END) AS reds,
     SUM(CASE WHEN event_type='gale1' THEN 1 ELSE 0 END) AS gale1,
     SUM(CASE WHEN event_type='gale2' THEN 1 ELSE 0 END) AS gale2
-    FROM strategy_events WHERE source_id=? GROUP BY strategy_id`).bind(SMASH).all()
+    FROM strategy_events WHERE source_id=? AND created_at>=? GROUP BY strategy_id`).bind(SMASH,cutoff).all()
  ]);
- return {platform:'smash',game:'double',precision:'minute',telegramConnected:false,settings,strategies,events:events.results,score:score.results};
+ return {platform:'smash',game:'double',precision:'minute',telegramConnected:false,settings,scoreCutoff:cutoff,strategies,events:events.results,score:score.results};
 }
 export async function handleStrategies(request,env,url){
  // Todas as estratégias e alertas permanecem privados, inclusive as leituras.
@@ -88,6 +90,13 @@ export async function handleStrategies(request,env,url){
    });
   }
 
+ if(path==='/api/strategies/score/reset'&&request.method==='POST'){
+  const previous=await getSettings(db),when=stamp(),next={...previous,scoreResetAt:when};
+  await db.prepare(`INSERT INTO strategy_settings(source_id,config_json,updated_at) VALUES(?,?,?)
+   ON CONFLICT(source_id) DO UPDATE SET config_json=excluded.config_json,updated_at=excluded.updated_at`)
+   .bind(SMASH,JSON.stringify(next),when).run();
+  return json({ok:true,scoreCutoff:scoreCutoff(next,when),history_preserved:true});
+ }
  if(path==='/api/strategies/state'&&request.method==='GET')return json(await loadState(db));
  if(path==='/api/strategies/events'&&request.method==='GET'){
   const after=Number(url.searchParams.get('after')||0);
@@ -98,10 +107,11 @@ export async function handleStrategies(request,env,url){
  if(path==='/api/strategies/settings'&&request.method==='PUT'){
   const data=await read(request);const old=await getSettings(db);
   for(const key of ['automatic','prealert','entry','fireworks'])if(data[key]!==undefined&&typeof data[key]!=='boolean')return json({error:`Opção ${key} inválida`},400);
+   if(data.scoreResetMode!==undefined&&!['daily','manual'].includes(data.scoreResetMode))return json({error:'Modo de placar inválido'},400);
   const templates={...old.templates};
   if(data.templates!==undefined){if(!data.templates||typeof data.templates!=='object'||Array.isArray(data.templates))return json({error:'Modelos inválidos'},400);
    for(const [k,v] of Object.entries(data.templates)){if(!allowedTemplateKeys.has(k)||typeof v!=='string'||v.length>1200)return json({error:'Mensagem inválida: '+k},400);templates[k]=v;}}
-  const next={...old,...Object.fromEntries(['automatic','prealert','entry','fireworks'].filter(k=>k in data).map(k=>[k,data[k]])),templates};
+  const next={...old,...Object.fromEntries(['automatic','prealert','entry','fireworks','scoreResetMode'].filter(k=>k in data).map(k=>[k,data[k]])),templates};
   const writes=[db.prepare(`INSERT INTO strategy_settings(source_id,config_json,updated_at) VALUES(?,?,?)
    ON CONFLICT(source_id) DO UPDATE SET config_json=excluded.config_json,updated_at=excluded.updated_at`).bind(SMASH,JSON.stringify(next),stamp())];
   // Preserve operações em andamento quando o monitoramento for pausado.

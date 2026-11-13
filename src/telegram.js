@@ -2,6 +2,7 @@
 // NEXO V9 — Telegram Bot API: envio SOMENTE pelo Worker (token nunca vai ao navegador).
 // Sinais descrevem resultados observados. Não existe previsão confiável ou aposta automática.
 import {authorized,sameOrigin} from './admin.js';
+import {scoreCutoff} from './scoreboard.js';
 const SOURCE='historicosblaze:smash:double';
 const HEADERS={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:HEADERS});
@@ -57,7 +58,7 @@ export async function getTelegramSettings(db){
  // Apenas a associação antiga conhecida é corrigida; mídia personalizada é preservada.
  if(media.activation.type==='sticker'&&media.activation.fileId===STICKER_IDS.win)
   media.activation={...media.prealert};
- return {...Object.fromEntries(FIELDS.map(k=>[k,typeof value[k]==='boolean'?value[k]:TELEGRAM_DEFAULT[k]])),media,destinations:cleanDestinations(value.destinations)};
+ return {...Object.fromEntries(FIELDS.map(k=>[k,typeof value[k]==='boolean'?value[k]:TELEGRAM_DEFAULT[k]])),media,destinations:cleanDestinations(value.destinations),signalDestination:String(value.signalDestination||''),resultTextWithSticker:value.resultTextWithSticker===true};
 }
 // Somente entradas novas, capturadas durante a coleta e com horário recente, entram na fila.
 // O ID do evento e unico: um mesmo resultado nao cria dois envios.
@@ -166,6 +167,8 @@ async function dispatchOne(env,row,now){
   }else{
    const settings=await getTelegramSettings(db);
    const media=settings.media[row.event_type]||MEDIA_NONE;
+    let usedTextFallback=false;
+    const chat=settings.signalDestination&&settings.destinations.some(x=>x.id===settings.signalDestination)?settings.signalDestination:env.TELEGRAM_CHAT_ID;
    const {main,stone}=splitResultText(row.event_type,row.message);
    const text=capped(row.message);
    let messageId=Number(row.telegram_message_id||0);
@@ -173,30 +176,46 @@ async function dispatchOne(env,row,now){
     if(!messageId){
      const captionText=stone?main:text;
      const caption=captionText.length>1024?(captionText.slice(0,880)+'\n…\n'+captionText.slice(-130)):captionText;
-     const result=await botCall(env,'sendAnimation',{chat_id:env.TELEGRAM_CHAT_ID,animation:media.fileId,...(caption?{caption}:{})});
+     let result;
+      try{result=await botCall(env,'sendAnimation',{chat_id:chat,animation:media.fileId,...(caption?{caption}:{})});}
+      catch(error){
+       if(['win','winWhite','red'].includes(row.event_type)&&String(error?.message||'').includes('Telegram HTTP 400')){
+        result=await botCall(env,'sendMessage',{chat_id:chat,text:main||text,link_preview_options:{is_disabled:true}});
+        usedTextFallback=true;
+       }else throw error;
+      }
      messageId=Number(result?.message_id||0);
      if(!messageId)throw Error('Telegram não confirmou o GIF');
      await db.prepare('UPDATE telegram_outbox SET telegram_message_id=? WHERE queue_id=?').bind(messageId,row.queue_id).run();
     }
-    if(stone)await botCall(env,'sendMessage',{chat_id:env.TELEGRAM_CHAT_ID,text:stone,link_preview_options:{is_disabled:true}});
+    if(stone)await botCall(env,'sendMessage',{chat_id:chat,text:stone,link_preview_options:{is_disabled:true}});
    }else if(media.type==='sticker'){
     if(!messageId){
-     const result=await botCall(env,'sendSticker',{chat_id:env.TELEGRAM_CHAT_ID,sticker:media.fileId});
+     let result;
+      try{result=await botCall(env,'sendSticker',{chat_id:chat,sticker:media.fileId});}
+      catch(error){
+       if(['win','winWhite','red'].includes(row.event_type)&&String(error?.message||'').includes('Telegram HTTP 400')){
+        // Se o sticker ficou inválido, não perder o WIN/RED: envia texto visível.
+        result=await botCall(env,'sendMessage',{chat_id:chat,text:main||text,link_preview_options:{is_disabled:true}});
+        usedTextFallback=true;
+       }else throw error;
+      }
      messageId=Number(result?.message_id||0);
      if(!messageId)throw Error('Telegram não confirmou a figurinha');
      // Salvar o ID antes de qualquer mensagem adicional protege a figurinha de reenvio.
      await db.prepare('UPDATE telegram_outbox SET telegram_message_id=? WHERE queue_id=?').bind(messageId,row.queue_id).run();
     }
-    if(settings.textWithSticker&&main)await botCall(env,'sendMessage',{chat_id:env.TELEGRAM_CHAT_ID,text:main,link_preview_options:{is_disabled:true}});
-    if(stone)await botCall(env,'sendMessage',{chat_id:env.TELEGRAM_CHAT_ID,text:stone,link_preview_options:{is_disabled:true}});
+    if((settings.textWithSticker||settings.resultTextWithSticker&&['win','winWhite','red'].includes(row.event_type))&&main&&!usedTextFallback&&!Number(row.telegram_message_id||0))
+       await botCall(env,'sendMessage',{chat_id:chat,text:main,link_preview_options:{is_disabled:true}});
+    if(stone)await botCall(env,'sendMessage',{chat_id:chat,text:stone,link_preview_options:{is_disabled:true}});
    }else{
     if(!messageId){
-     const result=await botCall(env,'sendMessage',{chat_id:env.TELEGRAM_CHAT_ID,text:stone?main:text,link_preview_options:{is_disabled:true}});
+     const result=await botCall(env,'sendMessage',{chat_id:chat,text:stone?main:text,link_preview_options:{is_disabled:true}});
      messageId=Number(result?.message_id||0);
      if(!messageId)throw Error('Telegram não confirmou a mensagem');
      await db.prepare('UPDATE telegram_outbox SET telegram_message_id=? WHERE queue_id=?').bind(messageId,row.queue_id).run();
     }
-    if(stone)await botCall(env,'sendMessage',{chat_id:env.TELEGRAM_CHAT_ID,text:stone,link_preview_options:{is_disabled:true}});
+    if(stone)await botCall(env,'sendMessage',{chat_id:chat,text:stone,link_preview_options:{is_disabled:true}});
    }
    if(!messageId)throw Error('Telegram não retornou identificador da mensagem');
    const writes=[db.prepare("UPDATE telegram_outbox SET status='sent',last_error=NULL,sent_at=?,telegram_message_id=? WHERE queue_id=?").bind(stamp(),messageId,row.queue_id)];
@@ -212,7 +231,7 @@ async function dispatchOne(env,row,now){
    }
    await db.batch(writes);
    // A entrada está confirmada e preservada. Somente agora remover a atenção.
-   if(row.event_type==='entry'&&settings.deletePrealert){
+   if(row.event_type==='entry'&&settings.deletePrealert&&chat===env.TELEGRAM_CHAT_ID){
     try{await deleteOldPrealert(env,row.strategy_id);}
     catch{
      // A exclusão tem retry independente, sem reenviar a entrada.
@@ -282,13 +301,16 @@ export async function handleTelegram(request,env,url){
   if(typeof data?.strategyId!=='string'||!/^[0-9a-f-]{36}$/.test(data.strategyId))return json({error:'Estrategia invalida'},400);
   const rule=await db.prepare('SELECT definition FROM strategies WHERE id=? AND platform=? AND game=?').bind(data.strategyId,'smash','double').first();
   if(!rule)return json({error:'Estrategia nao encontrada'},404);
-  const score=await db.prepare(`SELECT
+  const state=await db.prepare('SELECT config_json FROM strategy_settings WHERE source_id=?').bind(SOURCE).first();
+   let cfg={};try{cfg=JSON.parse(state?.config_json||'{}')}catch{}
+   const cutoff=scoreCutoff(cfg);
+   const score=await db.prepare(`SELECT
     SUM(CASE WHEN event_type='win' THEN 1 ELSE 0 END) AS wins,
     SUM(CASE WHEN event_type='win' AND round_number=0 THEN 1 ELSE 0 END) AS white_wins,
     SUM(CASE WHEN event_type='red' THEN 1 ELSE 0 END) AS reds,
     SUM(CASE WHEN event_type='gale1' THEN 1 ELSE 0 END) AS gale1,
     SUM(CASE WHEN event_type='gale2' THEN 1 ELSE 0 END) AS gale2
-    FROM strategy_events WHERE strategy_id=? AND source_id=?`).bind(data.strategyId,SOURCE).first();
+    FROM strategy_events WHERE strategy_id=? AND source_id=? AND created_at>=?`).bind(data.strategyId,SOURCE,cutoff).first();
   let name='Estrategia';try{name=String(JSON.parse(rule.definition).name||name).slice(0,70)}catch{}
   const wins=Number(score?.wins||0),reds=Number(score?.reds||0),closed=wins+reds;
   const message=`📊 NEXO — ${name}\nWIN: ${wins} (branco: ${Number(score?.white_wins||0)})\nRED: ${reds}\nGale 1: ${Number(score?.gale1||0)} | Gale 2: ${Number(score?.gale2||0)}\nAcerto: ${closed?(wins*100/closed).toFixed(1):'0.0'}% (${closed} encerradas)`;
@@ -312,7 +334,15 @@ export async function handleTelegram(request,env,url){
    return json({ok:true,messageId:result?.message_id??null});
   }catch{return json({error:'Falha no envio. Verifique as permissoes e o destino do bot.'},502);}
  }
- if(path==='/api/telegram/status'&&request.method==='GET'){
+ if(path==='/api/telegram/test-signal-destination'&&request.method==='POST'){
+   if(!telegramConfigured(env))return json({error:'Bot não configurado'},409);
+   const settings=await getTelegramSettings(db);
+   const chat=settings.signalDestination&&settings.destinations.some(x=>x.id===settings.signalDestination)?settings.signalDestination:env.TELEGRAM_CHAT_ID;
+   try{const result=await botCall(env,'sendMessage',{chat_id:chat,text:'✅ NEXO V29: teste do destino dos sinais automáticos. Esta mensagem não é um WIN.',link_preview_options:{is_disabled:true}});
+    return json({ok:true,messageId:result?.message_id??null});}
+   catch(error){return json({error:(String(error?.message||'').match(/Telegram HTTP \d{3}/)||[])[0]||'Falha no destino do Telegram'},502);}
+  }
+  if(path==='/api/telegram/status'&&request.method==='GET'){
   const settings=await getTelegramSettings(db);
   const counts=await db.prepare(`SELECT status,COUNT(*) AS n FROM telegram_outbox GROUP BY status`).all();
   const recent=await db.prepare(`SELECT event_type,status,last_error,created_at,sent_at FROM telegram_outbox ORDER BY queue_id DESC LIMIT 12`).all();
@@ -367,7 +397,11 @@ export async function handleTelegram(request,env,url){
      try{media[event]=normalizeMedia(val)}catch(e){return json({error:event+': '+e.message},400)}
     }
     next.media=media;
-   }else if(FIELDS.includes(k)&&typeof v==='boolean')next[k]=v;
+   }else if(k==='signalDestination'&&typeof v==='string'){
+     if(v&&!previous.destinations.some(x=>x.id===v))return json({error:'Destino não cadastrado'},400);
+     next.signalDestination=v;
+    }else if(k==='resultTextWithSticker'&&typeof v==='boolean')next.resultTextWithSticker=v;
+    else if(FIELDS.includes(k)&&typeof v==='boolean')next[k]=v;
    else return json({error:'Configuração inválida: '+k},400);
   }
   if(next.enabled&&!telegramConfigured(env))return json({error:'Configure os dois segredos do Telegram no Worker antes de ativar.'},409);
