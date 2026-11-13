@@ -131,7 +131,11 @@ export async function processSmashSnapshot(env,source,records,roundIds,now=stamp
  }
  const settings=await getSettings(db);
  if(!settings.automatic){await db.prepare('UPDATE strategy_cursors SET last_round_id=?,last_updated=? WHERE source_id=?').bind(newest,now,source.id).run();return {paused:true,new:index};}
- const rules=(await loadRules(db)).filter(x=>x.enabled);
+ // V22: nao abandonar operacao ja iniciada se a regra for pausada durante um GALE.
+ const allRules=await loadRules(db);
+ const activeRows=(await db.prepare('SELECT strategy_id,state_json FROM strategy_runtime').bind().all()).results;
+ const activeIds=new Set(activeRows.filter(x=>parseJSON(x.state_json)?.active).map(x=>x.strategy_id));
+ const rules=allRules.filter(x=>x.enabled||activeIds.has(x.id));
  const stateRows=rules.length?(await db.prepare('SELECT * FROM strategy_runtime WHERE strategy_id IN ('+rules.map(()=>'?').join(',')+')').bind(...rules.map(x=>x.id)).all()).results:[];
  const states=new Map(stateRows.map(x=>[x.strategy_id,parseJSON(x.state_json)||{active:null,prealertRoundId:null}]));
  const telegram=await getTelegramSettings(db);
